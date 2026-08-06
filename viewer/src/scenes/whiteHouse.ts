@@ -10,7 +10,7 @@ export const whiteHouse: BuildingModel = {
   id: 'whitehouse',
   label: 'White House',
   blurb: 'Procedural Three.js reconstruction from one photograph',
-  referenceImage: '/reference-whitehouse.svg',
+  referenceImage: '/reference-whitehouse.jpg',
   heightM: TOTAL_H,
   build: (o) => createWhiteHouseModel(o),
 

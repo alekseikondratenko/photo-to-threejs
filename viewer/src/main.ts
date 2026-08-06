@@ -1,16 +1,12 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { am271 } from './scenes/am271';
 import { taipei101 } from './scenes/taipei101';
 import { empireState } from './scenes/empireState';
 import { whiteHouse } from './scenes/whiteHouse';
-import { walkieTalkie } from './scenes/walkieTalkie';
-import { hydraulicCylinder } from './scenes/hydraulicCylinder';
-import { facadeVilla } from './scenes/facadeVilla';
 import { installMeasureHarness } from './lib/measure';
 import type { BuildingModel, View, ModelRuntime } from './lib/types';
 
-const MODELS: BuildingModel[] = [am271, taipei101, empireState, whiteHouse, walkieTalkie, hydraulicCylinder, facadeVilla];
+const MODELS: BuildingModel[] = [whiteHouse, taipei101, empireState];
 
 const app = document.getElementById('app')!;
 
@@ -188,7 +184,7 @@ addEventListener('resize', () => {
 installMeasureHarness(() => active.targets);
 // debug handles for the render-review loop
 Object.assign(window as unknown as Record<string, unknown>, {
-  __scene: scene, __camera: camera, __renderer: renderer,
+  __scene: scene, __camera: camera, __renderer: renderer, __controls: controls,
   __runtime: () => runtime, __active: () => active,
 });
 loadModel(MODELS[0]);

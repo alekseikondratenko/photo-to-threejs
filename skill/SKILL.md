@@ -15,18 +15,18 @@ photograph in pixels, and measure your own render the same way.
 
 ## Two shape classes, one method
 
-**Extruded/swept subjects** (all five buildings) — plan path swept or lofted vertically
+**Extruded/swept subjects** (most buildings) — plan path swept or lofted vertically
 via `lib/geometry.ts`. The rear is always invented.
 
-**Solids of revolution** (the hydraulic cylinder) — a measured radius profile revolved
-with `THREE.LatheGeometry`, authored directly in the model file without the sweep
-helpers. This is the one class where a single view is NEARLY COMPLETE: revolving the
-profile reproduces all 360 degrees exactly, so only genuinely asymmetric features
-(bosses, bolt clocking) are inferred. Under orthographic projection a cylinder's
-silhouette half-width IS its true radius at any axis tilt, so radii are exact — but
-axial foreshortening cannot be separated from the true aspect ratio, so lengths are not.
+**Solids of revolution** (machine parts, tanks — proven on a bolted hydraulic cylinder) —
+a measured radius profile revolved with `THREE.LatheGeometry`, authored directly in the
+model file without the sweep helpers. This is the one class where a single view is NEARLY
+COMPLETE: revolving the profile reproduces all 360 degrees exactly, so only genuinely
+asymmetric features (bosses, bolt clocking) are inferred. Under orthographic projection a
+cylinder's silhouette half-width IS its true radius at any axis tilt, so radii are exact —
+but axial foreshortening cannot be separated from the true aspect ratio, so lengths are not.
 
-**2D orthographic elevations / CAD drawings** (the "Facade Principale" villa) — the
+**2D orthographic elevations / CAD drawings** (proven on a villa facade drawing) — the
 INVERSE of a solid of revolution. A drawing has no perspective at all, so every width and
 height is exact to the pixel and the linear px->m scale is trustworthy. But it carries
 **zero depth information**: building depth, roof form, projection depths and the side and
@@ -38,7 +38,7 @@ The measurement-first workflow and the bug checklist apply to all three.
 
 ## Working reference implementation
 
-The `viewer/` directory of this repository — seven completed subjects sharing one library.
+The `viewer/` directory of this repository — three completed subjects sharing one library.
 Read these before writing anything new:
 
 | Path | What it is |
@@ -46,12 +46,13 @@ Read these before writing anything new:
 | `src/lib/geometry.ts` | Path/sweep/loft/cap/merge helpers. Every bug below is documented at its call site. |
 | `src/lib/measure.ts` | `window.__measure()` — canvas readback scored against reference targets. |
 | `src/lib/types.ts` | `BuildingModel` contract: build fn, views, light rig, measured targets. |
-| `src/models/am271Tower.ts` | Slab tower — rounded-rectangle plan, 45 real slab rings. |
+| `src/models/whiteHouse.ts` | White House — classical detail as geometry, shifted-lens camera solve. |
 | `src/models/taipei101.ts` | Taipei 101 — chamfered plan, 8 flaring modules, 64 real floor rings. |
-| `src/models/empireState.ts` | Empire State — notched Art Deco plan, setback tiers, bundled piers. |
+| `src/models/empireState.ts` | Empire State — notched Art Deco plan, attached-block base, bundled piers. |
 | `src/scenes/*.ts` | Per-building camera/lighting/targets. Add a new building here + `models/`. |
 
-Run it: `cd viewer && npm run dev` (port 5199 — 5173 collides with a Docker container on this machine). Add a building by writing
+Run it: `cd viewer && npm run dev` (port 5200, `--strictPort` — 5173 can be silently
+shadowed by a Docker container binding it on IPv6). Add a building by writing
 `models/<id>.ts` + `scenes/<id>.ts` and appending to `MODELS` in `main.ts`. **Never edit
 an existing model to make a new one** — they share `lib/`, nothing else.
 
@@ -78,12 +79,14 @@ inferred.
 
 ## Step 2 — Measure the reference in pixels, never by eye
 
-Decode with the repo's stdlib PNG reader (`sips -s format png` first for JPEGs):
+Decode the image programmatically — any decoder works; the point is that every number
+comes from a scan, not an eyeball:
 
 ```python
-import sys; sys.path.insert(0, 'skill/forge/stage1_intake')
-from build_detail_inventory import load_image
-w, h, px = load_image(Path('ref.png'))
+from PIL import Image
+im = Image.open('ref.png').convert('RGB')
+w, h = im.size
+px = im.load()          # px[x, y] -> (r, g, b)
 ```
 
 Get, at minimum:
@@ -100,8 +103,8 @@ Record which numbers are observed and which are assumed. Put it in the file head
 
 ## Step 3 — Build, with detail as GEOMETRY not texture
 
-**The single most important rule.** On AM271 the horizontal rhythm is 45 real projecting
-slab rings and it reads at any distance. The first Taipei pass used 8 smooth lofted
+**The single most important rule.** On the first slab-tower subject the horizontal rhythm
+is 45 real projecting slab rings and it reads at any distance. The first Taipei pass used 8 smooth lofted
 surfaces with floor lines painted into the map — and the mip chain averaged them into
 uniform gloss. No material tweak recovers it. If a feature defines the building's
 identity, model it.
@@ -227,6 +230,23 @@ Tuning map:
 21. **Width fraction is not comparable across aspect ratios.** A portrait photograph and
     a square viewport give different fractions for identical geometry. Compare the
     building's own width:height silhouette ratio, and add back any occluded base.
+
+22. **A tapering profile above the top occupied floor is ROOF, not curtain wall.** The
+    silhouette scan gives widths, not materials, and the seductive mistake is to loft the
+    facade glazing through the whole measured profile — which produced a 53 m habitable
+    glass vase on a tower whose photograph shows a short dark roof with a crown rising
+    out of it. Before assigning any material above the last floor plate, check the
+    reference for the material break (darker, matte, sloped, no window grid) — and
+    expect the crown structure to repeat the building's own formal language (Taipei's
+    crown flares outward exactly like its modules).
+
+23. **Invent occluded base massing as ATTACHED BLOCKS, never as concentric tiers.**
+    Scaling the tower plan by 2x and stacking shrinking copies is the path of least
+    code, and it reads as a wedding cake. Real setback massing is a cluster of vertical
+    masses hugging the shaft — each wing with its own roof height, stepping by
+    different amounts on the two axes. Overlapping plain boxes produce that silhouette
+    directly. Bonus: scaling a *notched* shaft plan up to base size also scales the
+    notch geometry, which sprays pier artefacts; base blocks want their own plain plan.
 
 ## Honesty requirements
 

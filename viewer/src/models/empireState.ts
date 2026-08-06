@@ -33,8 +33,12 @@ import type { ModelRuntime } from '../lib/types';
  *    (1.41:1) for a ~38 deg yaw, which reproduces the measured 69.7 m projected width.
  *    Confidence 0.4.
  *  - The BASE AND LOWER SETBACKS ARE ENTIRELY INVENTED. Every part of the building
- *    below ~209 m is hidden behind foreground blocks in the reference. The 5-storey
- *    base and shoulder tiers below are archetype, not observation.
+ *    below ~209 m is hidden behind foreground blocks in the reference. The base
+ *    massing is archetype, not observation — modelled as ATTACHED VERTICAL MASSES
+ *    (a full-block base with flanking wing blocks, each with its own roof height,
+ *    stepping differently on the two axes), not as concentric scaled tiers. A first
+ *    pass used concentric tiers and it read as a wedding cake; real setback massing
+ *    is a cluster of blocks hugging the shaft.
  *  - Rear and left elevations are MIRRORED from the visible faces.
  */
 
@@ -68,11 +72,19 @@ const CROWN_TIERS: [number, number, number][] = [
   [356.0, 363.0, 0.30],
 ];
 
-/** Base and shoulder tiers — INVENTED, occluded in the reference. */
-const BASE_TIERS: [number, number, number][] = [
-  [0.0, 26.0, 2.24],
-  [26.0, 44.0, 1.72],
-  [44.0, 62.0, 1.32],
+/**
+ * Base massing — INVENTED, occluded in the reference. [yBottom, yTop, width, depth].
+ *
+ * Overlapping boxes, not concentric tiers: a full-block 5-storey base, a wide wing
+ * mass, a taller inner mass the shaft rises out of, and a short collar at the shaft
+ * foot. The overlaps produce the stepped "tree" silhouette — wide steps on the long
+ * axis, shallow steps on the short axis — that concentric scaling cannot.
+ */
+const BASE_BLOCKS: [number, number, number, number][] = [
+  [0.0, 24.0, 128.0, 61.0],
+  [24.0, 50.0, 118.0, 47.0],
+  [24.0, 62.0, 94.0, 52.0],
+  [62.0, 70.0, 74.0, 46.0],
 ];
 
 // ------------------------------------------------------------------ palette (reference-sampled)
@@ -183,10 +195,10 @@ export function createEmpireStateModel(
   const wallGeoms: THREE.BufferGeometry[] = [];
   const capGeoms: THREE.BufferGeometry[] = [];
 
-  function tier(y0: number, y1: number, s: number, withPiers: boolean) {
-    const p = withPiers ? planNotched(s) : plan(s);
+  function tier(y0: number, y1: number, p: THREE.Vector2[], withPiers: boolean) {
     const h = y1 - y0;
-    const inset = DIM.spandrelInset / (DIM.planX * s / 2);
+    const w = Math.max(...p.map((q) => q.x)) - Math.min(...p.map((q) => q.x));
+    const inset = DIM.spandrelInset / (w / 2);
     wallGeoms.push(sweepBand(scalePath(p, 1 - inset), h, y0, 0, 1, undefined, true));
     capGeoms.push(capDisc(p, y1, true));
     if (!withPiers) return;
@@ -204,10 +216,12 @@ export function createEmpireStateModel(
     }
   }
 
-  // base + shoulders (invented), main shaft (observed), crown tiers (measured)
-  for (const [y0, y1, s] of BASE_TIERS) tier(y0, y1, s, true);
-  tier(DIM.shaftY0, DIM.shaftY1, 1.0, true);
-  for (const [y0, y1, s] of CROWN_TIERS) tier(y0, y1, s, s > 0.66);
+  // base blocks (invented), main shaft (observed), crown tiers (measured)
+  // Plain chamfered rectangles for the base — the notched light-well plan is a
+  // shaft feature, and at base scale the notches produced pier artefacts.
+  for (const [y0, y1, w, d] of BASE_BLOCKS) tier(y0, y1, rectPath(w, d, DIM.chamfer), true);
+  tier(DIM.shaftY0, DIM.shaftY1, planNotched(1), true);
+  for (const [y0, y1, s] of CROWN_TIERS) tier(y0, y1, s > 0.66 ? planNotched(s) : plan(s), s > 0.66);
 
   const walls = new THREE.Mesh(mergeGeoms(wallGeoms), mWindows);
   walls.name = 'window-walls';

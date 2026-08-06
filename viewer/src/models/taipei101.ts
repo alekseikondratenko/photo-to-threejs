@@ -23,14 +23,18 @@ import type { ModelRuntime } from '../lib/types';
  *  - Four large circular ruyi medallions at the top of the pedestal.
  *
  * TOP PROFILE, measured row by row (width in px, stack top = 180 px):
- *    crown taper   y 416->320   1.00 -> 0.72
- *    crown upper   y 320->290   0.72 -> 0.37
- *    pinnacle      y 290->198   ~0.36, waisted to 0.32, cornice bulge to 0.43
+ *    roof taper    y 416->320   1.00 -> 0.72
+ *    roof upper    y 320->290   0.72 -> 0.37
+ *    crown         y 290->198   ~0.36 at its base, WIDENING to ~0.40 below the ribs
  *    neck          y 198->172   0.33 -> 0.19
  *    BALL collar   y 172->155   peak width 37 px  (the bulge below the mast)
  *    mast          y 155->56    0.04, ring stack near the tip
- *  The pinnacle is a near-straight STEPPED BOX, not a cone — an early pass tapered it
- *  continuously and lost the building's identity at the top.
+ *  TWO lessons paid for here. (1) The crown is a stepped structure, not a cone — an
+ *  early pass tapered it continuously and lost the identity. (2) The tapering profile
+ *  between the stack top and the crown is ROOF, not curtain wall: a first pass built
+ *  it as 53 m of habitable teal glazing and it read as a giant vase the photograph
+ *  plainly does not show. The taper is a short dark roof transition; the crown rises
+ *  out of it and FLARES OUTWARD as it climbs, repeating the modules' own language.
  *
  * INFERRED / EXTERNAL:
  *  - ABSOLUTE SCALE IS NOT RECOVERABLE FROM THIS PHOTOGRAPH. Unlike the AM271 archviz
@@ -63,9 +67,12 @@ export const DIM = {
   pedestalSpread: 6.0,
   medallionR: 9.4,
   // top assembly, from the measured profile above
-  crownH: 40.0, crownTopScale: 0.72,
-  crownUpperH: 13.0, crownUpperScale: 0.38,
-  pinnacleH: 38.0, pinnacleScale: 0.355, pinnacleTopScale: 0.325, pinnacleCornice: 0.43,
+  roofH: 14.0, roofMidScale: 0.72,       // dark roof transition, NOT glazing
+  roofUpperH: 6.0,
+  crownBaseScale: 0.40,
+  crownH: 46.0, crownFlare: 0.11, crownFloors: 12,   // flares outward like the modules
+  ribBandH: 10.0, ribScale: 0.46, ribCount: 5,        // pagoda ledge stack
+  capH: 15.0, capScale: 0.28,                          // dark plain box below the ball
   neckH: 11.0, neckScale: 0.19,
   ballH: 7.0, ballR: 5.1,
   mastH: 42.0,
@@ -74,10 +81,12 @@ export const DIM = {
 export const MODULE_H = DIM.floorH * DIM.floorsPerModule;   // 32.4
 export const STACK_H = MODULE_H * DIM.modules;               // 259.2
 export const STACK_Y0 = DIM.pedestalH;                       // 100
-export const CROWN_Y0 = STACK_Y0 + STACK_H;                  // 359.2
-export const CROWN_UPPER_Y0 = CROWN_Y0 + DIM.crownH;         // 399.2
-export const PINNACLE_Y0 = CROWN_UPPER_Y0 + DIM.crownUpperH; // 412.2
-export const NECK_Y0 = PINNACLE_Y0 + DIM.pinnacleH;          // 450.2
+export const ROOF_Y0 = STACK_Y0 + STACK_H;                   // 359.2
+export const ROOF2_Y0 = ROOF_Y0 + DIM.roofH;                 // 373.2
+export const CROWN_Y0 = ROOF2_Y0 + DIM.roofUpperH;           // 379.2
+export const RIB_Y0 = CROWN_Y0 + DIM.crownH;                 // 425.2
+export const CAP_Y0 = RIB_Y0 + DIM.ribBandH;                 // 435.2
+export const NECK_Y0 = CAP_Y0 + DIM.capH;                    // 450.2
 export const BALL_Y0 = NECK_Y0 + DIM.neckH;                  // 461.2
 export const MAST_Y0 = BALL_Y0 + DIM.ballH;                  // 468.2
 export const TOTAL_H = MAST_Y0 + DIM.mastH;                  // 510.2
@@ -215,12 +224,17 @@ export function createTaipei101Model(
     envMapIntensity: 0.28,
     side: THREE.DoubleSide,
   });
-  const mPinnacleGlass = new THREE.MeshPhysicalMaterial({
-    map: curtainWallTexture(scalePath(basePath, DIM.pinnacleScale), 10, 909),
+  const mCrownGlass = new THREE.MeshPhysicalMaterial({
+    map: curtainWallTexture(scalePath(basePath, DIM.crownBaseScale), DIM.crownFloors, 909),
     color: 0xdfe6e8,
     roughness: 0.45, metalness: 0.12,
     envMapIntensity: 0.35,
     side: THREE.DoubleSide,
+  });
+  // Dark slate roof — deliberately NOT the module glass. Assigning the facade
+  // material here is exactly the mistake that produced the phantom vase.
+  const mRoof = new THREE.MeshStandardMaterial({
+    color: 0x36514e, roughness: 0.72, metalness: 0.10, envMapIntensity: 0.25,
   });
   const mCornice = new THREE.MeshStandardMaterial({ color: COL.cornice, roughness: 0.55, metalness: 0.35 });
   const mMetal = new THREE.MeshStandardMaterial({ color: COL.cornerMetal, roughness: 0.4, metalness: 0.65 });
@@ -230,8 +244,8 @@ export function createTaipei101Model(
   const mGround = new THREE.MeshStandardMaterial({ color: COL.ground, roughness: 0.95 });
   const mNeighbour = new THREE.MeshStandardMaterial({ color: COL.neighbour, roughness: 0.9 });
   Object.assign(materials, {
-    'curtain-wall': mGlass, 'pedestal-glass': mPedestalGlass, 'pinnacle-glass': mPinnacleGlass,
-    cornice: mCornice, 'corner-metal': mMetal, pinnacle: mPinnacle,
+    'curtain-wall': mGlass, 'pedestal-glass': mPedestalGlass, 'crown-glass': mCrownGlass,
+    roof: mRoof, cornice: mCornice, 'corner-metal': mMetal, pinnacle: mPinnacle,
     mast: mMast, medallion: mMedallion, ground: mGround,
   });
 
@@ -366,54 +380,95 @@ export function createTaipei101Model(
   }
   root.add(medallions); nodes['ruyi-medallions'] = medallions;
 
-  // ---------------------------------------------------------------- crown (two tapers)
-  const crown = new THREE.Mesh(
+  // ---------------------------------------------------------------- roof transition
+  // Short, steep, and DARK. This is roof, not habitable glazing: the photograph shows
+  // the module stack ending in a sloped roof that pulls in fast, with the crown
+  // rising out of it. The 53 m teal vase a first pass put here does not exist.
+  const roof = new THREE.Mesh(
     mergeGeoms([
-      sweepBand(scalePath(basePath, 1 + DIM.flare), DIM.crownH, CROWN_Y0, 0, 1,
-        scalePath(basePath, DIM.crownTopScale), true),
-      sweepBand(scalePath(basePath, DIM.crownTopScale), DIM.crownUpperH, CROWN_UPPER_Y0, 0, 1,
-        scalePath(basePath, DIM.crownUpperScale), true),
+      sweepBand(scalePath(basePath, 1 + DIM.flare), DIM.roofH, ROOF_Y0, 0, 1,
+        scalePath(basePath, DIM.roofMidScale), true),
+      sweepBand(scalePath(basePath, DIM.roofMidScale), DIM.roofUpperH, ROOF2_Y0, 0, 1,
+        scalePath(basePath, DIM.crownBaseScale + 0.02), true),
+      capDisc(scalePath(basePath, DIM.crownBaseScale + 0.02), CROWN_Y0, true),
     ]),
-    mGlass,
+    mRoof,
   );
-  crown.name = 'crown-taper';
-  crown.castShadow = shadows; crown.receiveShadow = shadows;
-  root.add(crown); nodes['crown-taper'] = crown;
+  roof.name = 'crown-roof';
+  roof.castShadow = shadows; roof.receiveShadow = shadows;
+  root.add(roof); nodes['crown-roof'] = roof;
 
-  // ---------------------------------------------------------------- stepped pinnacle
-  // A near-straight stepped BOX with a cornice bulge, not a cone.
-  const pin = new THREE.Group(); pin.name = 'pinnacle';
-  const pinBody = new THREE.Mesh(
-    sweepBand(cham(DIM.pinnacleScale), DIM.pinnacleH, PINNACLE_Y0, 0, 1,
-      cham(DIM.pinnacleTopScale), true),
-    mPinnacleGlass,
+  // ---------------------------------------------------------------- crown structure
+  // A mini-module: it FLARES OUTWARD as it rises, repeating the stack's own language,
+  // and every floor line is a real projecting nosing so the silhouette reads stepped,
+  // never smooth.
+  const crown = new THREE.Group(); crown.name = 'crown-structure';
+  const crownGlassGeoms: THREE.BufferGeometry[] = [];
+  const crownStepGeoms: THREE.BufferGeometry[] = [];
+  const crownFloorH = DIM.crownH / DIM.crownFloors;
+  for (let f = 0; f < DIM.crownFloors; f += 1) {
+    const t0 = f / DIM.crownFloors, t1 = (f + 1) / DIM.crownFloors;
+    const s0 = DIM.crownBaseScale * (1 + DIM.crownFlare * t0);
+    const s1 = DIM.crownBaseScale * (1 + DIM.crownFlare * t1);
+    const y = CROWN_Y0 + t0 * DIM.crownH;
+    const glassH = crownFloorH - DIM.slabH;
+    crownGlassGeoms.push(
+      sweepBand(scalePath(basePath, s0), glassH, y, 0, 1, scalePath(basePath, s1), true),
+    );
+    const nose = offsetChamferedSquare(
+      DIM.plan * s1, DIM.chamfer * s1, DIM.notch, DIM.slabProject * 0.7,
+    );
+    crownStepGeoms.push(sweepBand(nose, DIM.slabH, y + glassH, 0, 1, undefined, true));
+    crownStepGeoms.push(capDisc(nose, y + glassH + DIM.slabH, true));
+    crownStepGeoms.push(capDisc(nose, y + glassH, false));
+  }
+  const crownGlass = new THREE.Mesh(mergeGeoms(crownGlassGeoms), mCrownGlass);
+  crownGlass.name = 'crown-glazing';
+  crownGlass.receiveShadow = shadows;
+  const crownSteps = new THREE.Mesh(mergeGeoms(crownStepGeoms), mPinnacle);
+  crownSteps.name = 'crown-steps';
+  crown.add(crownGlass, crownSteps);
+  root.add(crown); nodes['crown-structure'] = crown;
+
+  // ---------------------------------------------------------------- pagoda rib band
+  // The stack of heavy projecting ledges between the crown glazing and the dark cap —
+  // the most identifiable feature of the top after the mast itself.
+  const ribGeoms: THREE.BufferGeometry[] = [];
+  const crownTopScale = DIM.crownBaseScale * (1 + DIM.crownFlare);
+  // recessed dark backing band behind the ledges
+  ribGeoms.push(sweepBand(cham(DIM.capScale + 0.06), DIM.ribBandH, RIB_Y0, 0, 1, undefined, true));
+  const ribPitch = DIM.ribBandH / DIM.ribCount;
+  for (let i = 0; i < DIM.ribCount; i += 1) {
+    // ledges shrink slightly as they climb, pagoda-fashion
+    const s = DIM.ribScale + (crownTopScale - DIM.ribScale) * (1 - i / (DIM.ribCount - 1)) * 0.5;
+    const y = RIB_Y0 + i * ribPitch;
+    const ledge = cham(s);
+    ribGeoms.push(sweepBand(ledge, ribPitch * 0.45, y, 0, 1, undefined, true));
+    ribGeoms.push(capDisc(ledge, y + ribPitch * 0.45, true));
+    ribGeoms.push(capDisc(ledge, y, false));
+  }
+  const ribBand = new THREE.Mesh(mergeGeoms(ribGeoms), mPinnacle);
+  ribBand.name = 'pagoda-ribs';
+  ribBand.castShadow = shadows;
+  root.add(ribBand); nodes['pagoda-ribs'] = ribBand;
+
+  // ---------------------------------------------------------------- dark cap
+  const cap = new THREE.Mesh(
+    mergeGeoms([
+      sweepBand(cham(DIM.capScale), DIM.capH, CAP_Y0, 0, 1, undefined, true),
+      capDisc(cham(DIM.capScale), CAP_Y0 + DIM.capH, true),
+    ]),
+    mPinnacle,
   );
-  pinBody.name = 'pinnacle-body';
-  pin.add(pinBody);
-
-  const bands: THREE.BufferGeometry[] = [];
-  // flared skirt where the pinnacle meets the crown
-  bands.push(sweepBand(cham(DIM.pinnacleScale, 2.4), 2.6, PINNACLE_Y0 - 1.0, 0, 1, undefined, true));
-  bands.push(capDisc(cham(DIM.pinnacleScale, 2.4), PINNACLE_Y0 + 1.6, true));
-  // cornice bulge at ~45% height, matching the measured 0.43 width band
-  const cy = PINNACLE_Y0 + DIM.pinnacleH * 0.45;
-  bands.push(sweepBand(cham(DIM.pinnacleCornice), 3.0, cy, 0, 1, undefined, true));
-  bands.push(capDisc(cham(DIM.pinnacleCornice), cy + 3.0, true));
-  bands.push(capDisc(cham(DIM.pinnacleCornice), cy, false));
-  // dark cap on top of the pinnacle
-  bands.push(sweepBand(cham(DIM.pinnacleTopScale, 1.1), 3.2, NECK_Y0 - 3.2, 0, 1, undefined, true));
-  bands.push(capDisc(cham(DIM.pinnacleTopScale, 1.1), NECK_Y0, true));
-  const pinBands = new THREE.Mesh(mergeGeoms(bands), mPinnacle);
-  pinBands.name = 'pinnacle-bands';
-  pin.add(pinBands);
-  pin.traverse((o: THREE.Object3D) => { (o as THREE.Mesh).castShadow = shadows; });
-  root.add(pin); nodes.pinnacle = pin;
+  cap.name = 'dark-cap';
+  cap.castShadow = shadows;
+  root.add(cap); nodes['dark-cap'] = cap;
 
   // ---------------------------------------------------------------- neck + ball + mast
   const top = new THREE.Group(); top.name = 'mast-assembly';
 
   const neck = new THREE.Mesh(
-    sweepBand(cham(DIM.pinnacleTopScale), DIM.neckH, NECK_Y0, 0, 1, cham(DIM.neckScale), true),
+    sweepBand(cham(DIM.capScale), DIM.neckH, NECK_Y0, 0, 1, cham(DIM.neckScale), true),
     mPinnacle,
   );
   neck.name = 'neck';

@@ -18,10 +18,10 @@ with the help of the img2threejs process harness:
 What was actually carried over from it is set out honestly in README.md under
 "Provenance". In summary: one utility function was genuinely reused
 (`build_detail_inventory.load_image`, a standard-library PNG decoder); its
-spec/gating and PBR-extraction steps were used for the AM271 subject only; and
-its honesty discipline shaped the documentation conventions throughout. The
+spec/gating and PBR-extraction steps were used for one development subject only;
+and its honesty discipline shaped the documentation conventions throughout. The
 viewer, the geometry library, the measurement harness, the scoring loop and all
-seven 3D models in this repository are original work.
+three 3D models in this repository are original work.
 
 --------------------------------------------------------------------------------
 Third-party runtime dependencies
@@ -41,17 +41,21 @@ Apache License above. See docs/LICENSING.md for the per-image position.
 
 Included in this repository:
 
-  viewer/public/reference-empirestate.jpg
-      Photograph by Aleksei Kondratenko, 19 August 2020. Nikon Coolpix P900.
-      Licensed CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+  viewer/public/reference-whitehouse.jpg
+      Photograph by Tomasz Zielonka, via Unsplash.
+      Unsplash License (https://unsplash.com/license).
 
   viewer/public/reference-taipei101.jpg
       "Taipei 101" by AngMoKio, via Wikimedia Commons.
       Licensed CC BY-SA 3.0 (https://creativecommons.org/licenses/by-sa/3.0/).
       Edited by Mylius. Reused here under the same licence.
 
-Deliberately NOT included: five reference images whose redistribution terms
-could not be established or are known to forbid it. The viewer shows a
-placeholder in their place. The 3D models built from them are unaffected and
-remain part of this repository — depicting a building is separate from
-redistributing a photograph of it (17 U.S.C. §120(a); UK CDPA s.62).
+  viewer/public/reference-empirestate.jpg
+      Photograph by Aleksei Kondratenko, 19 August 2020. Nikon Coolpix P900.
+      Licensed CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).
+
+Deliberately NOT included: the stock photograph the White House model was
+originally solved against, whose provenance could not be established. The 3D
+model built from it is unaffected and remains part of this repository —
+depicting a building is separate from redistributing a photograph of it
+(17 U.S.C. §120(a); UK CDPA s.62). See docs/LICENSING.md.

@@ -1,16 +1,23 @@
 # White House
 
 **Reference class:** web photograph, low and wide · **The best-converged model in the
-repository**, and the one whose reference photograph is *not* included.
+repository.**
 
-> **Why there is no photograph on this page.** The image this model was solved against is a
-> stock photograph with no EXIF and no traceable author. The model is unaffected and free to
-> publish — [depicting a building is not the same as redistributing a photograph of
-> it](../../LICENSING.md) — but the photograph itself is somebody's copyrighted work and
-> we cannot say whose. Swapping in a different photograph would not fix this page either:
-> every number below is derived from *that* frame's pixels, so a substitute image would
-> make the comparison meaningless while looking superficially fine. Excluded rather than
-> faked.
+| Reference photograph | Reconstruction (`ref` view) |
+|---|---|
+| ![reference](reference.jpg) | ![ref](render-ref.png) |
+
+<sub>Photograph by [Tomasz Zielonka](https://unsplash.com/@tomekzielonka) on
+[Unsplash](https://unsplash.com/) (Unsplash License). Front-on at aspect 1.4999 — within
+0.03 % of the solve frame's 1.4995.</sub>
+
+> **One honesty note about this pairing.** The model was *solved* against a different
+> photograph — a stock image whose author could not be traced, which is why it is not in
+> this repository ([why unverifiable means excluded](../../LICENSING.md)). Every number
+> below derives from that frame's pixels. The Unsplash photograph above is a licence-clean
+> stand-in with near-identical framing: right for judging the geometry by eye, but it is
+> not the frame the percentages were measured against — its overcast light does not match
+> the hard sun the model reproduces, and that mismatch is visible, not hidden.
 
 ## The reconstruction
 

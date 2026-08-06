@@ -1,9 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="600" height="450" viewBox="0 0 600 450" role="img" aria-label="Reference photograph not included">
-  <rect width="600" height="450" fill="#1b1f27"/>
-  <rect x="12" y="12" width="576" height="426" fill="none" stroke="#39424f" stroke-width="2" stroke-dasharray="10 8"/>
-  <text x="300" y="188" text-anchor="middle" fill="#8b97a8" font-family="ui-monospace,Menlo,monospace" font-size="21">Reference photograph</text>
-  <text x="300" y="220" text-anchor="middle" fill="#8b97a8" font-family="ui-monospace,Menlo,monospace" font-size="21">not included</text>
-  <text x="300" y="266" text-anchor="middle" fill="#5d6878" font-family="ui-monospace,Menlo,monospace" font-size="14">Vendor image, watermarked</text>
-  <text x="300" y="288" text-anchor="middle" fill="#5d6878" font-family="ui-monospace,Menlo,monospace" font-size="14">redistribution not permitted</text>
-  <text x="300" y="330" text-anchor="middle" fill="#4a5462" font-family="ui-monospace,Menlo,monospace" font-size="13">The 3D model is unaffected — see docs/LICENSING.md</text>
-</svg>

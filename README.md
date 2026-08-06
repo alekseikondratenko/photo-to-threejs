@@ -9,7 +9,7 @@ then prove how close it got, in numbers, against the photograph's own pixels.
 
 There is no photogrammetry here and no neural network. An agent reads the photograph,
 measures it, writes TypeScript that builds the geometry, renders it, scores the render
-against the photograph, and iterates. This repository is the method, the viewer, the seven
+against the photograph, and iterates. This repository is the method, the viewer, the three
 models it has produced, and the measurements.
 
 ---
@@ -32,16 +32,13 @@ MCP prompt, so installing the server brings the method with it.
 ## Examples
 
 Three subjects, chosen because each one broke an assumption the previous one had
-established.
+established. Same three in the viewer, same order.
 
 | Subject | Reference class | What it proved | Best metric |
 |---|---|---|---|
 | [**White House**](docs/examples/white-house/) | web photo, low + wide | classical detail must be *geometry*, not texture | **99–100 %** |
-| [**Empire State**](docs/examples/empire-state/) | elevated photo | linear pixel→metre works again from elevation | 100 % on `litLuma` |
 | [**Taipei 101**](docs/examples/taipei-101/) | ground-level photo | a single linear scale **breaks**; use local ratios | 87 % on `litLuma` |
-
-The full set of seven — adding Residential Tower AM271, 20 Fenchurch St, a bolted hydraulic
-cylinder, and a villa facade — is in the viewer.
+| [**Empire State**](docs/examples/empire-state/) | elevated photo | linear pixel→metre works again from elevation | 100 % on `litLuma` |
 
 ### The differentiator: what did it make up?
 
@@ -58,7 +55,7 @@ geometry is a mirror-and-plausibility construction, and saying so is the point.
 cd viewer && npm install && npm run dev
 ```
 
-Then open <http://localhost:5200>. Seven models, five camera views each, wireframe and
+Then open <http://localhost:5200>. Three models, five camera views each, wireframe and
 site-context toggles, and `window.__measure()` in the console to score the live canvas
 against the stored targets.
 
@@ -83,7 +80,7 @@ Two things make the numbers trustworthy, and both are easy to get wrong:
   subjects wider than the harness's 0.20W–0.90W scan window, which produces a *false*
   100 % match. The White House page shows exactly this trap and what to quote instead.
 
-The 19 failure modes that each cost a full review cycle are listed in
+The 23 failure modes that each cost a full review cycle are listed in
 [`skill/SKILL.md`](skill/SKILL.md).
 
 ---
@@ -106,7 +103,7 @@ of its surfaces were observed and which were invented, and it is the direct ance
 "what did it make up?" idea above.
 
 **What is original here:** the viewer, the geometry library, the measurement harness, the
-scoring loop, the MCP server, and all seven models. Their review loop was an agent
+scoring loop, the MCP server, and all three models. Their review loop was an agent
 eyeballing a comparison sheet; this replaced it with deterministic numeric scoring, which
 is what makes the tables above possible.
 
@@ -118,9 +115,11 @@ is what makes the tables above possible.
 commercially included; keep the notice and state your changes. Attribution to img2threejs
 is in [`NOTICE`](NOTICE), as their licence requires.
 
-**Reference photographs are licensed separately and are not covered by the above.** Two
-are included (one CC BY 4.0, one CC BY-SA 3.0); five are deliberately excluded because
-their redistribution terms could not be established. The models built from them are
-unaffected — depicting a building is not the same as redistributing a photograph of it.
+**Reference photographs are licensed separately and are not covered by the above.** All
+three viewer references are included under their own licences (CC BY 4.0, CC BY-SA 3.0,
+Unsplash License). One photograph is deliberately excluded: the stock image the White
+House model was originally solved against, whose author could not be traced. The model
+built from it is unaffected — depicting a building is not the same as redistributing a
+photograph of it.
 
 Full position, per image, with the reasoning: [`docs/LICENSING.md`](docs/LICENSING.md).
