@@ -16,16 +16,30 @@ models it has produced, and the measurements.
 
 ## Two ways to use this
 
-| You want | Do this | Needs |
-|---|---|---|
-| **The method** — apply it yourself, in any agent | Copy [`skill/SKILL.md`](skill/SKILL.md) into `~/.claude/skills/photo-to-threejs-building/`, or just paste it as a prompt | nothing |
-| **The tools + the 3D panel** | Add the MCP server to your client (see [`mcp/`](mcp/)) | Node 18+ |
+### The skill — the method, in any agent
 
-You do **not** need to clone this repository to use either. Cloning is for reading the
-models and the viewer.
+```bash
+npx skills add alekseikondratenko/photo-to-threejs
+```
 
-The two paths are not alternatives so much as nested: the MCP server ships `SKILL.md` as an
-MCP prompt, so installing the server brings the method with it.
+Installs into Claude Code, Codex, Cursor and [70+ agents](https://github.com/vercel-labs/skills).
+Claude Code users can equivalently use the plugin marketplace:
+
+```
+/plugin marketplace add alekseikondratenko/photo-to-threejs
+```
+
+Or copy [`skills/photo-to-threejs-building/`](skills/photo-to-threejs-building/) into
+`~/.claude/skills/` by hand. The skill is self-contained: it carries the method
+(`SKILL.md`), a deterministic reference scanner (`scripts/measure_reference.py`), and the
+full viewer engine as a scaffold (`assets/viewer-template/`) — no clone required.
+
+### The MCP server — tools + the 3D panel
+
+Add the server in [`mcp/`](mcp/) to your client (Node 18+). It ships `SKILL.md` as an MCP
+prompt, so installing the server brings the method with it.
+
+Cloning the repository is for reading the three worked examples and the viewer.
 
 ---
 
@@ -81,7 +95,7 @@ Two things make the numbers trustworthy, and both are easy to get wrong:
   100 % match. The White House page shows exactly this trap and what to quote instead.
 
 The 23 failure modes that each cost a full review cycle are listed in
-[`skill/SKILL.md`](skill/SKILL.md).
+[`skills/photo-to-threejs-building/SKILL.md`](skills/photo-to-threejs-building/SKILL.md).
 
 ---
 

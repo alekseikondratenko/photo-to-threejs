@@ -4,3 +4,5 @@ dist/
 *.log
 handshake.log
 .host-harness
+__pycache__/
+*.pyc

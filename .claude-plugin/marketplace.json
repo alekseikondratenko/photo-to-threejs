@@ -1,0 +1,21 @@
+{
+  "name": "photo-to-threejs",
+  "owner": {
+    "name": "Aleksei Kondratenko"
+  },
+  "metadata": {
+    "description": "Rebuild a building from one photograph as a procedural, measured Three.js model",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "photo-to-threejs-building",
+      "description": "Measurement-first single-photo building reconstruction: pixel-scan the reference, build procedural Three.js geometry, score the render against the photograph's own pixels, iterate until the numbers converge.",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/photo-to-threejs-building"
+      ]
+    }
+  ]
+}

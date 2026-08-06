@@ -38,18 +38,27 @@ The measurement-first workflow and the bug checklist apply to all three.
 
 ## Working reference implementation
 
-The `viewer/` directory of this repository — three completed subjects sharing one library.
-Read these before writing anything new:
+Two places to find the engine, depending on how this skill reached you:
+
+- **Repo cloned** ([photo-to-threejs](https://github.com/alekseikondratenko/photo-to-threejs)):
+  use its `viewer/` — three completed subjects sharing one library. Read the worked
+  examples before writing anything new.
+- **Skill installed standalone** (`npx skills add`, plugin marketplace, or a copied
+  folder): the same library ships in this skill's `assets/viewer-template/` — copy it
+  into the workspace, `npm install`, and add subjects to it. No repo needed.
+
+Either way, the files that matter:
 
 | Path | What it is |
 |---|---|
 | `src/lib/geometry.ts` | Path/sweep/loft/cap/merge helpers. Every bug below is documented at its call site. |
 | `src/lib/measure.ts` | `window.__measure()` — canvas readback scored against reference targets. |
 | `src/lib/types.ts` | `BuildingModel` contract: build fn, views, light rig, measured targets. |
-| `src/models/whiteHouse.ts` | White House — classical detail as geometry, shifted-lens camera solve. |
-| `src/models/taipei101.ts` | Taipei 101 — chamfered plan, 8 flaring modules, 64 real floor rings. |
-| `src/models/empireState.ts` | Empire State — notched Art Deco plan, attached-block base, bundled piers. |
+| `src/models/whiteHouse.ts` | White House — classical detail as geometry, shifted-lens camera solve. *(repo only)* |
+| `src/models/taipei101.ts` | Taipei 101 — chamfered plan, 8 flaring modules, 64 real floor rings. *(repo only)* |
+| `src/models/empireState.ts` | Empire State — notched Art Deco plan, attached-block base, bundled piers. *(repo only)* |
 | `src/scenes/*.ts` | Per-building camera/lighting/targets. Add a new building here + `models/`. |
+| `scripts/measure_reference.py` | *(in this skill)* Deterministic reference scan: silhouette, floor-pitch autocorrelation per band, lit/shadow bands. Run it before hand-measuring; read its docstring for known limits. |
 
 Run it: `cd viewer && npm run dev` (port 5200, `--strictPort` — 5173 can be silently
 shadowed by a Docker container binding it on IPv6). Add a building by writing
@@ -79,8 +88,16 @@ inferred.
 
 ## Step 2 — Measure the reference in pixels, never by eye
 
-Decode the image programmatically — any decoder works; the point is that every number
-comes from a scan, not an eyeball:
+Start with the shipped scanner — it does the silhouette, per-band floor-pitch
+autocorrelation and lit/shadow bands deterministically:
+
+```bash
+python3 scripts/measure_reference.py ref.jpg          # needs Pillow
+```
+
+For anything it does not cover (bay pitch on one facade strip, colour patches at
+specific coordinates, magnified crops near the noise floor), scan directly — any
+decoder works; the point is that every number comes from a scan, not an eyeball:
 
 ```python
 from PIL import Image

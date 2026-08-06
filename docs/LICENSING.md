@@ -55,6 +55,6 @@ public repository is exactly where that becomes someone else's problem too.
 ## Re-scoring against your own photograph
 
 To re-run a measured comparison, supply your own photograph of a subject and
-re-solve — the method for doing so is `skill/SKILL.md`, and the numbers you
+re-solve — the method for doing so is `skills/photo-to-threejs-building/SKILL.md`, and the numbers you
 should be reproducing are in the `targets` block of the corresponding
 `viewer/src/scenes/<id>.ts`.
