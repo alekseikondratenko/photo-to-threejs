@@ -1,5 +1,5 @@
 {
-  "name": "photo-to-threejs-mcp-spike",
+  "name": "photo-to-threejs-mcp",
   "version": "0.0.1",
   "main": "index.js",
   "scripts": {
@@ -12,7 +12,7 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "",
+  "description": "MCP server exposing the photo-to-threejs viewer as an MCP App panel",
   "type": "module",
   "dependencies": {
     "@modelcontextprotocol/ext-apps": "^1.7.5",

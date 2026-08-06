@@ -1,5 +1,5 @@
 {
-  "name": "am271-tower-viewer",
+  "name": "photo-to-threejs-viewer",
   "private": true,
   "version": "1.0.0",
   "type": "module",
@@ -15,5 +15,6 @@
     "@types/three": "^0.169.0",
     "typescript": "^5.6.0",
     "vite": "^5.4.0"
-  }
+  },
+  "description": "Three.js viewer for measured single-photograph building reconstructions"
 }
