@@ -34,6 +34,16 @@ const HERE = import.meta.dirname;
 const DIST_DIR = path.join(HERE, "dist");
 const PANEL_URI = "ui://photo-to-threejs/viewer-panel.html";
 
+/**
+ * CSP allowance for the panel's iframe. Static declaration, dynamic ports:
+ * a single pinned origin loses the race whenever the preferred port is taken
+ * (field-tested: the panel rendered with a blank white frame because the
+ * server came up on 5201 while the CSP allowed only 5199). Allow the whole
+ * probe range instead.
+ */
+const VIEWER_ORIGINS = Array.from({ length: 20 }, (_, i) => `http://127.0.0.1:${PREFERRED_PORT + i}`);
+const PANEL_CSP = { frameDomains: VIEWER_ORIGINS, connectDomains: VIEWER_ORIGINS };
+
 /** SKILL.md travels with the server: repo layout first, bundled copy second. */
 function skillText(): string {
   const candidates = [
@@ -47,7 +57,7 @@ function skillText(): string {
 }
 
 export function createServer(): McpServer {
-  const server = new McpServer({ name: "photo-to-threejs", version: "0.3.0" });
+  const server = new McpServer({ name: "photo-to-threejs", version: "0.3.1" });
 
   server.registerTool(
     "classify_reference",
@@ -166,11 +176,10 @@ export function createServer(): McpServer {
       _meta: {
         ui: {
           resourceUri: PANEL_URI,
-          // CSP is declared statically but ports are dynamic: the server tries
-          // PREFERRED_PORT first precisely so this allowance usually matches.
-          // When it cannot (port taken), the iframe fails closed and the panel's
-          // open-in-browser button is the path — never a silent wrong render.
-          csp: { frameDomains: [`http://127.0.0.1:${PREFERRED_PORT}`] },
+          // Kept here for hosts that read tool-level metadata; the normative
+          // location per the spec is the resource (declared below), whose
+          // read-result metadata takes precedence.
+          csp: PANEL_CSP,
         },
       },
     },
@@ -188,11 +197,19 @@ export function createServer(): McpServer {
     server,
     "Reconstruction viewer panel",
     PANEL_URI,
-    { mimeType: RESOURCE_MIME_TYPE },
+    { mimeType: RESOURCE_MIME_TYPE, _meta: { ui: { csp: PANEL_CSP } } },
     async () => {
       const html = await fsp.readFile(path.join(DIST_DIR, "mcp-app.html"), "utf-8");
       return {
-        contents: [{ uri: PANEL_URI, mimeType: RESOURCE_MIME_TYPE, text: html }],
+        contents: [
+          {
+            uri: PANEL_URI,
+            mimeType: RESOURCE_MIME_TYPE,
+            text: html,
+            // Read-result metadata takes precedence over the listing entry.
+            _meta: { ui: { csp: PANEL_CSP } },
+          },
+        ],
       };
     },
   );

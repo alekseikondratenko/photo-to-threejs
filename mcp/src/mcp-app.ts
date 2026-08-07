@@ -27,14 +27,10 @@ function showViewer(url: string) {
   openBtn.hidden = false;
   emptyEl.hidden = true;
   frame.src = url;
-  setStatus(url);
-  // If the CSP or a lost port race blocks the iframe, no load event arrives.
-  const timer = setTimeout(() => {
-    setStatus("panel blocked from embedding localhost — use open in browser");
-    emptyEl.textContent = "viewer running — open it in your browser";
-    emptyEl.hidden = false;
-  }, 4000);
-  frame.addEventListener("load", () => clearTimeout(timer), { once: true });
+  // A CSP-blocked iframe still fires `load` on an empty document, so blocking
+  // is NOT detectable from in here (field-tested). Say so up front instead of
+  // pretending to know.
+  setStatus(`${url} — blank frame below? the host blocked embedding: use open in browser`);
 }
 
 const app = new App({ name: "photo-to-threejs viewer", version: "0.2.0" });
