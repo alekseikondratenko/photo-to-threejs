@@ -59,6 +59,7 @@ Either way, the files that matter:
 | `src/models/empireState.ts` | Empire State — notched Art Deco plan, attached-block base, bundled piers. *(repo only)* |
 | `src/scenes/*.ts` | Per-building camera/lighting/targets. Add a new building here + `models/`. |
 | `scripts/measure_reference.py` | *(in this skill)* Deterministic reference scan: silhouette, floor-pitch autocorrelation per band, lit/shadow bands. Run it before hand-measuring; read its docstring for known limits. |
+| `references/casebook.md` | *(in this skill)* The worked measurement stories — every subject's numbers, procedures and failures, including a corner view modelled frontal. **Standalone installs: this is your substitute for the repo-only model files above.** |
 
 Run it: `cd viewer && npm run dev` (port 5200, `--strictPort` — 5173 can be silently
 shadowed by a Docker container binding it on IPv6). Add a building by writing
@@ -66,6 +67,22 @@ shadowed by a Docker container binding it on IPv6). Add a building by writing
 an existing model to make a new one** — they share `lib/`, nothing else.
 
 ## Step 1 — Classify the reference. This changes everything downstream.
+
+**First, before anything else: determine the view topology.** How many faces of the
+subject are visible, and where are the corner (arris) lines in pixels? **Frontality is a
+claim, not a default, and it must be falsified before you choose a coordinate frame:**
+
+- Repeating elements (bays, windows, balusters, columns, courses) must show **equal pixel
+  pitch at both ends** of a facade for it to be parallel to the sensor. Pitch tightening
+  toward one end = that end recedes = a second face is visible.
+- The horizontal edge families (eaves, rails, string courses) must converge to **at most
+  one vanishing point**. Two convergence families = two visible faces.
+
+If either test fails, locate the arris, solve the yaw (Step 2 recipe), and model both
+faces. Shallow corner views are the trap: at 10–15° of yaw nothing "looks" oblique, there
+may be no lit/shadow split to warn you, and an anchored frontal reading then absorbs the
+foreshortening into wrong dimensions for the rest of the run. Write the topology finding
+down before building the frame — the first structural reading freezes everything after it.
 
 **Archviz render** (white massing context, no vertical convergence, clean sky):
 pixels map **linearly** to metres. You can read dimensions straight off the image.
@@ -93,7 +110,23 @@ vertical edge (fixes the vertical vanishing point, hence focal length and tilt
 together), and one known height (fixes distance). Then verify by projecting one known
 point back into the image before building anything. Two runs on the same photo have
 produced wildly different cameras when this was improvised — it is a high-variance
-step precisely when it is done by feel.
+step precisely when it is done by feel. And remember the topology finding: the recipe
+above uses ONE horizontal family; if Step 1 found two, solve the yaw first.
+
+Three worked camera solves, as recipes (numbers in `references/casebook.md`):
+
+- **Shifted lens (the default archviz case).** Verticals dead parallel yet the building
+  off-centre means a shift, not a tilt. Derive it: pick the fov whose vertical extent at
+  the solved distance matches the measured metres-per-pixel over a virtual frame
+  `fullScale` times taller than the render; then `offsetYFrac` drops the horizon onto the
+  reference's measured horizon row (`offsetYFrac = fullScale/2 − horizonRow/imageH`).
+  Reproduce with `camera.setViewOffset`, never a tilt.
+- **Horizon row → eye height.** The horizon row times the solved metres-per-pixel IS the
+  camera's height. A mid-height eye explains a constant floor pitch (near-linear pixels);
+  a ground eye predicts pitch compression with height. Check the two agree.
+- **Ground ellipse → distance.** Any circular ground feature (fountain, plaza ring)
+  images as an ellipse whose minor:major axis ratio equals eye height : distance. One
+  measurement pins the standoff.
 
 ## Step 2 — Measure the reference in pixels, never by eye
 
@@ -121,11 +154,51 @@ Get, at minimum:
 - **Silhouette** per row (left/right edge) — reveals taper, flare, setbacks, and the
   sawtooth of stacked modules. Smooth with a median filter first or brackets and
   cornices produce false boundaries.
-- **Corner position** → face-width split → camera yaw and plan aspect.
+- **Corner → yaw**, when Step 1 found two faces:
+  1. Measure the repeating-unit pitch on each face separately (`pitchL`, `pitchR`), in a
+     band at the same height.
+  2. Yaw = `atan2(pitchR, pitchL)` — the face with the tighter pitch is the more
+     foreshortened one.
+  3. True unit width = measured pitch / cos(face's angle to the sensor); plan widths
+     follow from the face-width split at the arris.
+  4. **Bailout:** if either pitch sits at the noise floor (≲8 px), the yaw is unsolvable
+     from pitch — parameterise the plan and fit it numerically (checklist item 24)
+     instead of forcing a number.
+- **Identity features, with pixel positions.** Inventory the features that make the
+  building recognisable — column x-positions, window centres, brace endpoints, feature
+  counts — while you are measuring. Each becomes a `targets.notes` entry. If it is not
+  a target now, the scoring loop will sacrifice it later (Step 4's first rule).
 - **Colours**: lit face, shadow face, trim, sky zenith, sky horizon — and the
   **lit/shadow luma ratio**, which is what you tune lighting against.
 
 Record which numbers are observed and which are assumed. Put it in the file header.
+
+## Step 2.5 — Cross-check before you build
+
+Autocorrelation hygiene first: smooth the profile, reject lags below ~6 px (JPEG ringing
+autocorrelates there and once produced a physically impossible 73° yaw), and confirm the
+winning lag by directly counting bands on a magnified crop.
+
+Then the method's core epistemic move: **every solved quantity predicts one thing you did
+not measure — check it before building.** A scale predicts the ground row; a camera
+predicts a landmark's image position; a floor pitch predicts the total height. Agreement
+within a few pixels earns the number. **A contradiction falsifies the method, not the
+building** — the linear solve that put ground level above Taipei's module stack was the
+method failing loudly, and the correct response was to change method, not to bend the
+building until the contradiction hid.
+
+## Step 3 gate — massing before detail, always
+
+Block out the ENTIRE building as plain massing first — every visible face, the roof
+planes, the big moves only — and score it against the photograph (Step 4) before adding
+any detail. A wrong topology or a wrong yaw shows up in the massing overlay in minutes;
+found later, it invalidates hours of decoration. Two two-hour runs have been spent
+detailing geometry whose frame was wrong from minute five.
+
+Scope rule, from every worked subject: **context is massing only** — ground plane, grey
+neighbour blocks, low-poly trees. Lawns, hedges and planting are not the subject; if the
+photograph makes a context element load-bearing (an occluder, a scale anchor), massing
+still suffices to stage it.
 
 ## Step 3 — Build, with detail as GEOMETRY not texture
 
