@@ -174,35 +174,41 @@ export function floorPitch(im: Bitmap, sil: SilRow[]): PitchBand[] {
       }
       prof.push(sum / Math.max(1, n));
     }
-    const n = prof.length;
-    if (n < 30) continue;
-    // High-pass first, or the smooth vertical lighting gradient autocorrelates
-    // at every small lag and buries the floor rhythm.
-    const HP = 15;
-    const dev = prof.map((v, i) => {
-      const lo = Math.max(0, i - HP), hi = Math.min(n, i + HP + 1);
-      let s = 0;
-      for (let j = lo; j < hi; j++) s += prof[j];
-      return v - s / (hi - lo);
-    });
-    const denom = dev.reduce((s, d) => s + d * d, 0) || 1;
-    const corr = new Map<number, number>();
-    for (let lag = 4; lag < Math.min(120, n >> 1); lag++) {
-      let c = 0;
-      for (let i = 0; i < n - lag; i++) c += dev[i] * dev[i + lag];
-      corr.set(lag, c / denom);
-    }
-    const peaks: { pitch_px: number; score: number }[] = [];
-    for (const [lag, c] of corr) {
-      const a = corr.get(lag - 1), z = corr.get(lag + 1);
-      if (a !== undefined && z !== undefined && c > a && c > z && c > 0.1) {
-        peaks.push({ pitch_px: lag, score: Math.round(c * 1000) / 1000 });
-      }
-    }
-    peaks.sort((p, q) => q.score - p.score);
-    out.push({ band: names[b], rows: n, peaks: peaks.slice(0, 4) });
+    const peaks = autocorrPeaks(prof);
+    if (peaks !== null) out.push({ band: names[b], rows: prof.length, peaks });
   }
   return out;
+}
+
+/** High-pass + autocorrelate a 1-D profile; return local-maxima peaks.
+ *  The high-pass matters: a smooth gradient autocorrelates at every small lag
+ *  and buries the repeating rhythm. */
+export function autocorrPeaks(prof: number[]): { pitch_px: number; score: number }[] | null {
+  const n = prof.length;
+  if (n < 30) return null;
+  const HP = 15;
+  const dev = prof.map((v, i) => {
+    const lo = Math.max(0, i - HP), hi = Math.min(n, i + HP + 1);
+    let s = 0;
+    for (let j = lo; j < hi; j++) s += prof[j];
+    return v - s / (hi - lo);
+  });
+  const denom = dev.reduce((s, d) => s + d * d, 0) || 1;
+  const corr = new Map<number, number>();
+  for (let lag = 4; lag < Math.min(120, n >> 1); lag++) {
+    let c = 0;
+    for (let i = 0; i < n - lag; i++) c += dev[i] * dev[i + lag];
+    corr.set(lag, c / denom);
+  }
+  const peaks: { pitch_px: number; score: number }[] = [];
+  for (const [lag, c] of corr) {
+    const a = corr.get(lag - 1), z = corr.get(lag + 1);
+    if (a !== undefined && z !== undefined && c > a && c > z && c > 0.1) {
+      peaks.push({ pitch_px: lag, score: Math.round(c * 1000) / 1000 });
+    }
+  }
+  peaks.sort((p, q) => q.score - p.score);
+  return peaks.slice(0, 4);
 }
 
 /** Left/right band luma inside the silhouette. On a corner view these are the
@@ -252,6 +258,116 @@ export function measureImage(path: string) {
     notes:
       "Pitch that drifts between bands = non-linear perspective; use local ratios. " +
       "Fine pitches near the JPEG noise floor need a magnified band-local crop.",
+  };
+}
+
+/**
+ * classify_reference core: evidence for reference class and view topology.
+ * Reports MEASUREMENTS with hints, never a bare verdict — classification is
+ * Step 1's judgement; this makes the judgement cheap and grounded.
+ */
+export function classifyReference(path: string) {
+  const im = decodeImage(path);
+  const sil = silhouette(im);
+  const allRows = boundedRows(sil, im.w);
+  const pitch = floorPitch(im, sil);
+
+  // Work on the largest CONTIGUOUS bounded run — detached bounded bands are
+  // foreground (trees, clutter) that happens to clear the margins.
+  const runs: number[][] = [];
+  for (const y of allRows) {
+    const cur = runs[runs.length - 1];
+    if (cur && y - cur[cur.length - 1] <= 3) cur.push(y);
+    else runs.push([y]);
+  }
+  const rows = runs.reduce((a, b) => (b.length > a.length ? b : a), [] as number[]);
+
+  // Vertical-edge slopes, Theil–Sen (median of pairwise slopes): a foreground
+  // canopy crossing the edge is an outlier to a median, a disaster to least
+  // squares.
+  const fit = (side: "left" | "right") => {
+    if (rows.length < 20) return null;
+    const step = Math.max(1, (rows.length / 40) | 0);
+    const pts: [number, number][] = [];
+    for (let i = 0; i < rows.length; i += step) pts.push([rows[i], sil[rows[i]][side]]);
+    const slopes: number[] = [];
+    for (let i = 0; i < pts.length; i++) {
+      for (let j = i + 1; j < pts.length; j++) {
+        const dy = pts[j][0] - pts[i][0];
+        if (Math.abs(dy) > 20) slopes.push((pts[j][1] - pts[i][1]) / dy);
+      }
+    }
+    return slopes.length ? Math.round(median(slopes) * 10000) / 10000 : null;
+  };
+  const leftSlope = fit("left"), rightSlope = fit("right");
+
+  // End-pitch asymmetry: column-luma profile across the subject at mid-height,
+  // autocorrelated separately for the left and right halves. Tighter pitch at
+  // one end = that end recedes = a second face is visible (Step 1's topology
+  // falsification, as a number).
+  let endPitch: { left: ReturnType<typeof autocorrPeaks>; right: ReturnType<typeof autocorrPeaks> } | null = null;
+  if (rows.length > 60) {
+    const midRows = rows.slice((rows.length * 0.45) | 0, (rows.length * 0.65) | 0);
+    // Median edges, not extrema: one occluded row must not collapse the span.
+    const l0 = Math.round(median(midRows.map((y) => sil[y].left)));
+    const r0 = Math.round(median(midRows.map((y) => sil[y].right)));
+    if (r0 - l0 > 80) {
+      const prof: number[] = [];
+      for (let x = l0; x <= r0; x++) {
+        let s = 0;
+        for (const y of midRows) {
+          const p = px(im, x, y);
+          s += luma(p[0], p[1], p[2]);
+        }
+        prof.push(s / midRows.length);
+      }
+      const half = prof.length >> 1;
+      endPitch = {
+        left: autocorrPeaks(prof.slice(0, half)),
+        right: autocorrPeaks(prof.slice(half)),
+      };
+    }
+  }
+
+  const hints: string[] = [];
+  if (rows.length < 20) {
+    hints.push(
+      "sky-bounded detection failed (occluded or cluttered margins) — the numeric " +
+      "evidence below is unavailable; classify by eye per Step 1 and say so",
+    );
+  }
+  if (leftSlope !== null && rightSlope !== null) {
+    if (Math.abs(leftSlope) < 0.02 && Math.abs(rightSlope) < 0.02) {
+      hints.push("verticals ~parallel: no tilt — archviz/elevated behaviour, shifted lens possible");
+    } else if (leftSlope < -0.03 && rightSlope > 0.03) {
+      hints.push("edges converge upward: tilted ground-level camera — solve the camera before measuring");
+    }
+  }
+  const strongest = (b?: PitchBand) => b?.peaks?.[0]?.pitch_px;
+  const top = strongest(pitch.find((b) => b.band === "top"));
+  const bottom = strongest(pitch.find((b) => b.band === "bottom"));
+  if (top && bottom && Math.abs(bottom / top - 1) > 0.15) {
+    hints.push(`vertical pitch drifts ${top}→${bottom} px between bands: non-linear perspective — use local ratios, not one global scale`);
+  }
+  const epL = endPitch?.left?.[0]?.pitch_px, epR = endPitch?.right?.[0]?.pitch_px;
+  if (epL && epR && Math.abs(epL / epR - 1) > 0.15) {
+    hints.push(`repeating-unit pitch differs between ends (${epL} vs ${epR} px): a second face is likely visible — run the corner→yaw recipe`);
+  }
+
+  return {
+    image: path,
+    size: [im.w, im.h],
+    evidence: {
+      sky_bounded_rows: rows.length,
+      vertical_edge_slopes: { left: leftSlope, right: rightSlope },
+      vertical_pitch_bands: pitch,
+      end_pitch_mid_band: endPitch,
+    },
+    hints,
+    notes:
+      "Evidence, not a verdict: Step 1 owns the classification. Missing evidence " +
+      "(few sky-bounded rows, no repeating elements) means the detectors could not " +
+      "see — not that the property is absent.",
   };
 }
 
@@ -345,6 +461,9 @@ export function scoreImages(renderPath: string, refPath: string) {
       top_row: { ref: refTop, render: renTop, delta: refTop !== null && renTop !== null ? renTop - refTop : null },
     },
     in_silhouette_luma: { ref: inLuma(ref, sRef), render: inLuma(ren, sRen) },
+    // Shared vocabulary with the viewer's __measure(): lit/shadow band luma and
+    // their ratio, so the skill's Step 4 tuning map applies to this output too.
+    bands: { ref: bandStats(ref, sRef), render: bandStats(ren, sRen) },
     sky_luma: [0.05, 0.2, 0.4, 0.6, 0.75].map((f) => ({
       at_height_frac: f, ref: skyAt(ref, f), render: skyAt(ren, f),
     })),

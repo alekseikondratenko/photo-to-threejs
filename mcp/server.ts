@@ -26,7 +26,8 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
 import { logHandshake } from "./log.ts";
-import { measureImage, scoreImages } from "./src/scan.ts";
+import { classifyReference, measureImage, scoreImages } from "./src/scan.ts";
+import { initWorkspace } from "./src/workspace.ts";
 import { ensureViewerServer, PREFERRED_PORT } from "./viewer-server.ts";
 
 const HERE = import.meta.dirname;
@@ -46,7 +47,58 @@ function skillText(): string {
 }
 
 export function createServer(): McpServer {
-  const server = new McpServer({ name: "photo-to-threejs", version: "0.2.0" });
+  const server = new McpServer({ name: "photo-to-threejs", version: "0.3.0" });
+
+  server.registerTool(
+    "classify_reference",
+    {
+      title: "Classify a reference photograph (evidence, not verdict)",
+      description:
+        "Run FIRST, before measuring: reports vertical-edge slopes (tilt/parallel verticals), " +
+        "per-band pitch drift (the linearity test), and end-pitch asymmetry across the facade " +
+        "(the two-faces/frontality falsification) — with hints. Classification itself stays " +
+        "the agent's Step 1 judgement; this grounds it in numbers in one call.",
+      inputSchema: {
+        image: z.string().describe("Absolute path to the photograph (png/jpg)"),
+      },
+    },
+    async ({ image }) => {
+      logHandshake("tools/call", { tool: "classify_reference", image });
+      const result = classifyReference(image);
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        structuredContent: result as unknown as Record<string, unknown>,
+      };
+    },
+  );
+
+  server.registerTool(
+    "init_workspace",
+    {
+      title: "Scaffold a reconstruction workspace",
+      description:
+        "Copies the viewer template into <dir>/viewer (if absent), writes compilable " +
+        "placeholder models/<id>.ts + scenes/<id>.ts stubs, and registers the subject in " +
+        "main.ts. Placeholder numbers are loudly marked: replace them with measured values " +
+        "before scoring — a converged score against invented targets is the false-100% trap.",
+      inputSchema: {
+        dir: z.string().describe("Absolute path of the workspace parent directory"),
+        subject: z.string().describe("Subject id, e.g. 'flatiron' — letters/digits only"),
+        referenceImage: z
+          .string()
+          .optional()
+          .describe("Public path or URL the viewer HUD should show for the reference"),
+      },
+    },
+    async ({ dir, subject, referenceImage }) => {
+      logHandshake("tools/call", { tool: "init_workspace", dir, subject });
+      const result = initWorkspace(dir, subject, referenceImage);
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        structuredContent: result as unknown as Record<string, unknown>,
+      };
+    },
+  );
 
   server.registerTool(
     "measure_reference",
@@ -105,7 +157,9 @@ export function createServer(): McpServer {
         "`npm run build` first and pass dist/) on localhost and shows it in a panel where the " +
         "host supports MCP Apps. Always also returns the URL: hosts without panels open it in " +
         "a browser instead. During active modelling prefer the workspace's own dev server — " +
-        "it hot-reloads; this panel refreshes per call.",
+        "it hot-reloads; this panel refreshes per call. HOSTS MAY SILENTLY NOT RENDER THE " +
+        "PANEL (Claude Code as of 2.1.221 does not fetch the View at all): unless the user " +
+        "confirms seeing it, report the URL and never state that a panel is visible.",
       inputSchema: {
         dir: z.string().describe("Absolute path to the built viewer directory (contains index.html)"),
       },

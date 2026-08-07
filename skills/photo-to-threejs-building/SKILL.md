@@ -61,8 +61,10 @@ Either way, the files that matter:
 | `scripts/measure_reference.py` | *(in this skill)* Deterministic reference scan: silhouette, floor-pitch autocorrelation per band, lit/shadow bands. Run it before hand-measuring; read its docstring for known limits. |
 | `references/casebook.md` | *(in this skill)* The worked measurement stories — every subject's numbers, procedures and failures, including a corner view modelled frontal. **Standalone installs: this is your substitute for the repo-only model files above.** |
 
-Run it: `cd viewer && npm run dev` (port 5200, `--strictPort` — 5173 can be silently
-shadowed by a Docker container binding it on IPv6). Add a building by writing
+Run it: `cd viewer && npm run dev`. Vite asks for 5200 and auto-increments if it is
+taken — **the URL vite prints is the truth**; never assume the documented port, and
+never hand-pick 5173 (a Docker container can bind it on IPv6 and shadow it silently).
+Add a building by writing
 `models/<id>.ts` + `scenes/<id>.ts` and appending to `MODELS` in `main.ts`. **Never edit
 an existing model to make a new one** — they share `lib/`, nothing else.
 
@@ -173,6 +175,27 @@ Get, at minimum:
 
 Record which numbers are observed and which are assumed. Put it in the file header.
 
+### Which rigor applies — decide at triage, not by momentum
+
+Every heavy procedure below has a trigger; running them unconditionally is how a small
+house eats a landmark-sized budget. Everything else starts manual-and-cheap, and
+escalates only on misfit.
+
+| Procedure | Fires when |
+|---|---|
+| Two-VP camera solve | topology found two families AND the massing overlay misfits |
+| Shipped scanner | photo class with a sky-bounded silhouette (docstring lists its limits) |
+| Corner→yaw recipe | two faces AND the yaw materially changes the massing |
+| Banded pitch autocorrelation | repeating elements ≥ ~8 px |
+| Full shifted-lens derivation | archviz class with parallel verticals |
+
+**Proportionality:** measure until the massing gate passes; after that, measure only
+where the overlay shows error. A camera residual smaller than your silhouette's line
+width is finished, not perfectible. For a building-scale subject, aim to reach the
+first scored massing within ~25 minutes; a landmark or hostile reference may take
+longer — say why in the header. Minutes saved here are spent in Step 5, where the eye
+actually looks.
+
 ## Step 2.5 — Cross-check before you build
 
 Autocorrelation hygiene first: smooth the profile, reject lags below ~6 px (JPEG ringing
@@ -232,6 +255,12 @@ Two rules that keep the loop honest:
 - **One eye pass per numeric pass.** After correcting the largest measured error, look
   at render and reference side by side at matched framing. Numbers can converge while
   the picture diverges; the eye is the only detector for features the metrics miss.
+- **Legibility floor.** Photometric targets constrain the REF-MATCHED view, not the
+  product: the default orbit view must read in neutral light. If the reference is
+  stylised (dusk, night, heavy grading), say so, score against it in the ref view, and
+  stage the default view legibly. A numerically converged black-on-black render is a
+  failed deliverable — one model run produced exactly that and was disqualified on
+  sight.
 
 For exact-size render files (side-by-sides, external scoring), the dev server accepts
 `POST /__save-render {name, dataUrl}` and writes `renders/<name>` — read the canvas
@@ -242,6 +271,35 @@ Tuning map:
 - ratio too high → raise hemisphere fill; too low → lower fill, raise sun
 - width fraction off → the plan ratio is wrong, or the framing is
 - banding contrast low → floor detail is texture-only; make it geometry
+
+## Step 5 — Finish pass: make it read as architecture
+
+Runs ONLY after Step 4's targets pass, and its law is: **polish is additive — it must
+not move a measured line.** Staged elements are a third declared category in the file
+header, alongside observed and invented.
+
+The elements that make a building read as finished (translate per building type — a
+tower's version of gutters and plinth is copings and podium reveals):
+
+- **Edge members**: ridge/hip caps, verge boards, fascia. The eye traces a building by
+  its trim lines; every one is a thin, cheap member.
+- **Rainwater goods**: gutters and downpipes (or scuppers) — their dark lines anchor
+  the eaves and corners.
+- **Plinth/base**: the building meets the ground on a visible base course, never a wall
+  sinking into lawn.
+- **Openings with depth and life**: reveals are holes in extruded walls, never decals —
+  and put an interior behind the glass. A lit room texture reads as occupancy; a bare
+  emissive pane reads as film. Construction in `references/polish.md`.
+- **Paired maps**: every large surface gets colour + bump from the same generator, at
+  metre-true UV scale.
+- **Human-scale staging**: the context the photograph shows, massing-level but composed.
+  Furniture at true scale is the strongest scale cue in the render.
+- **Atmosphere**: the sky you scored against doubles as the environment light; the
+  default view obeys the legibility floor.
+
+This pass is funded by the proportionality rule — the minutes not spent over-polishing
+a camera are spent here. Worked techniques, mined from a run that did this superbly:
+`references/polish.md`.
 
 ## Bug checklist — each of these already cost a full cycle
 
