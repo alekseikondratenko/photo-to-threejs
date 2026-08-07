@@ -1,52 +1,34 @@
 # MCP server
 
-**Status: working spike.** It renders an interactive Three.js scene inside an MCP App panel
-and proves the whole panel path works end to end. The measurement and scoring tools
-(`measure_reference`, `score_render`, `init_workspace`) are not in it yet — that is the next
-piece of work.
+The deterministic half of the method, as tools. The modelling intelligence stays in the
+host agent — an MCP server cannot perform the reconstruction (the White House run took
+190 tool calls of an LLM writing TypeScript). The server wraps what *is* deterministic:
 
-## Why it exists
-
-An MCP server cannot perform the reconstruction. The modelling is an LLM writing TypeScript
-across many iterations; MCP exposes *tools*, and the intelligence stays in the host client.
-So the server does not replace the method — it wraps it:
-
-- deterministic parts → **tools**
-- the method itself → an **MCP prompt** (`SKILL.md` travels with the server)
-- the viewer → an **MCP App panel**, with a localhost URL as the fallback
-
-## What was established
-
-WebGL runs inside the MCP App sandbox. This was genuinely uncertain — sources disagreed on
-whether panels could contain arbitrary HTML at all — so it was tested before anything was
-built on top of it.
-
-| Question | Answer |
+| Tool | What it does |
 |---|---|
-| Does a WebGL canvas render in the panel? | Yes — `WebGL 2.0 (OpenGL ES 3.0 Chromium)` |
-| Does `OrbitControls` respond to drag inside the sandbox? | Yes |
-| Is a ~890 KB single-file bundle rejected? | No |
-| Does Three.js need custom CSP? | **No.** The default sandbox CSP already grants `worker-src blob:` and `script-src 'unsafe-eval' blob:` |
-| Does `preserveDrawingBuffer` survive the sandbox? | Yes — canvas readback works, which the scoring harness depends on |
+| `measure_reference` | Pixel measurement of a photograph: per-row-sky silhouette (gradient-proof in both axes), floor-pitch autocorrelation per height band, lit/shadow bands |
+| `score_render` | Scans render and reference with the **same** detector: silhouette edge error (with per-band breakdown), area ratio, tip row, in-silhouette luma, sky gradient |
+| `open_viewer` | Serves a built viewer directory on localhost; shows it in an MCP App panel where the host supports one, and always returns the URL for a real browser |
 
-**Host support is per-client, not per-vendor.** Claude Desktop renders the panel. Claude
-Code 2.1.221 renders nothing for the identical server — it never fetches the View at all.
-That is why any viewer-opening tool should return a localhost URL *as well as* a panel.
+Plus the method itself as an MCP prompt: `reconstruct_from_photo` ships the full
+SKILL.md, wired to prefer these tools over hand-written scanners.
 
-One more constraint worth knowing: the panel is cross-origin with a `srcdoc` inner frame, so
-**the host cannot reach into it**. Browser automation gets no DOM access to panel content.
-A scoring loop therefore cannot drive `window.__measure()` from outside — the View has to
-call back out via `app.callServerTool()` instead.
+Why exactly these tools: two independent acceptance-test runs (one bare agent, one with
+the skill) each spent real time rebuilding exactly this trio mid-run. And the two runs
+self-scored ~4–8 px with their own rulers while differing 5× under one ruler — *self-scores
+are not comparable across runs*, which is the whole case for a standard `score_render`.
+Its output has been validated against those runs' renders: rankings and magnitudes agree
+with the independent Python scorer they were first judged by.
 
-## Shape
+## What the panel is
 
-```
-server.ts         one tool + one ui:// resource, tied by _meta.ui.resourceUri
-main.ts           --stdio for client config; Streamable HTTP otherwise
-viewer-server.ts  lazy localhost static server, probes upward from 5199
-mcp-app.html      the View's shell
-src/mcp-app.ts    Three.js scene, OrbitControls, MCP App handshake
-```
+A thin frame around the real viewer — `open_viewer` serves the viewer over localhost and
+the panel iframes it, so there is one viewer implementation, not a panel fork that can
+drift. Host support varies (per-client, not per-vendor): Claude Desktop renders panels,
+Claude Code 2.1.x does not — which is why every result also carries the plain URL. The
+iframe needs the host to honour the declared `frameDomains` CSP for
+`http://127.0.0.1:5199`; when it doesn't, the panel says so and the open-in-browser
+button is the path.
 
 ## Install
 
@@ -54,10 +36,11 @@ src/mcp-app.ts    Three.js scene, OrbitControls, MCP App handshake
 npm install && npm run build
 ```
 
-The View must be built before the server runs — the `ui://` resource is read from
+The panel bundle must be built before the server runs — the `ui://` resource is read from
 `dist/mcp-app.html` at request time.
 
-Then add to your MCP client config:
+Client config (Claude Desktop `claude_desktop_config.json`, or `claude mcp add` for
+Claude Code):
 
 ```json
 {
@@ -71,18 +54,22 @@ Then add to your MCP client config:
 }
 ```
 
-> Use an **absolute** path to `node` if you manage Node with nvm. Desktop clients launch
-> from the OS shell with a minimal `PATH` and will not otherwise find it.
+> Use an **absolute** path to `node` if you manage Node with nvm — desktop clients launch
+> with a minimal `PATH`. Restart the client fully afterwards; MCP servers load at startup.
 
-Restart the client fully afterwards — MCP servers are spawned at startup, so adding one
-mid-session does nothing.
+## Typical loop
 
-## Run it standalone
+1. `measure_reference` on the photograph — pitch per band, silhouette, bands.
+2. Agent authors `models/<id>.ts` + `scenes/<id>.ts` in a viewer workspace
+   (the skill's `assets/viewer-template/`, or this repo's `viewer/`).
+3. Save an exact-size render: the workspace dev server accepts
+   `POST /__save-render {name, dataUrl}` (never score a screenshot — they rescale).
+4. `score_render` render-vs-photo; fix the largest error; repeat. Identity features are
+   not covered by the metrics — target them separately and check them by eye.
+5. `open_viewer` on the built workspace (`npm run build` → pass `dist/`).
+
+## Run standalone
 
 ```bash
-npm run serve
+npm run serve   # Streamable HTTP on :3001 — the port the ext-apps basic-host probes
 ```
-
-Serves Streamable HTTP on `:3001`, which is the port the
-[ext-apps `basic-host`](https://github.com/modelcontextprotocol/ext-apps/tree/main/examples/basic-host)
-harness probes by default — the quickest way to see the panel without a desktop client.

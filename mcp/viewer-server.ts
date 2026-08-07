@@ -1,25 +1,24 @@
 /**
- * The §2.4 fallback, proved early.
+ * Localhost static server for viewer directories.
  *
- * Serves the built View over plain HTTP so the panel's "open in browser" button
- * has somewhere to send people, and so hosts that never render a panel (Claude
- * Code 2.1.221) still have a working viewer.
+ * Serves a built viewer (any directory with an index.html) so the MCP panel
+ * can iframe it and the `open in browser` button has a destination. Hosts
+ * that render no panel (Claude Code today) still get a working viewer via
+ * the returned URL — the fallback is the default path, not the contingency.
  *
- * Started lazily — a stdio server should not open a socket unless the tool is
- * actually used.
+ * Port policy: prefer 5199 (the panel's CSP frame allowance is declared
+ * against it — CSP is static, ports are not), probe upward if taken. Never
+ * 5173: Docker shadows it on IPv6 on at least one machine, silently.
  */
 import express from "express";
 import type { Server } from "node:http";
+import fs from "node:fs";
 import path from "node:path";
 
-const DIST_DIR = path.join(import.meta.dirname, "dist");
-
-// 5199 first, per the PLAN: 5173 is silently shadowed by Docker on IPv6 on at
-// least one machine. Probe upward rather than assuming 5199 is free either.
-const FIRST_PORT = 5199;
+export const PREFERRED_PORT = 5199;
 const ATTEMPTS = 20;
 
-let started: Promise<string> | undefined;
+const running = new Map<string, string>();
 
 function listen(app: express.Express, port: number): Promise<Server> {
   return new Promise((resolve, reject) => {
@@ -29,25 +28,32 @@ function listen(app: express.Express, port: number): Promise<Server> {
   });
 }
 
-/** Returns the viewer URL, starting the server on first call. */
-export function ensureViewerServer(): Promise<string> {
-  started ??= (async () => {
-    const app = express();
-    app.use(express.static(DIST_DIR));
-    app.get("/", (_req, res) => res.sendFile(path.join(DIST_DIR, "mcp-app.html")));
+/** Serve `dir` statically; returns the URL. One server per directory. */
+export async function ensureViewerServer(dir: string): Promise<string> {
+  const key = path.resolve(dir);
+  const existing = running.get(key);
+  if (existing) return existing;
 
-    for (let i = 0; i < ATTEMPTS; i++) {
-      const port = FIRST_PORT + i;
-      try {
-        await listen(app, port);
-        return `http://127.0.0.1:${port}/`;
-      } catch (e) {
-        if ((e as NodeJS.ErrnoException).code === "EADDRINUSE") continue;
-        throw e;
-      }
+  if (!fs.existsSync(path.join(key, "index.html"))) {
+    throw new Error(
+      `${key} has no index.html — for a vite workspace, run \`npm run build\` and pass its dist/ directory`,
+    );
+  }
+
+  const app = express();
+  app.use(express.static(key));
+
+  for (let i = 0; i < ATTEMPTS; i++) {
+    const port = PREFERRED_PORT + i;
+    try {
+      await listen(app, port);
+      const url = `http://127.0.0.1:${port}/`;
+      running.set(key, url);
+      return url;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "EADDRINUSE") continue;
+      throw e;
     }
-    throw new Error(`No free port in ${FIRST_PORT}–${FIRST_PORT + ATTEMPTS - 1}`);
-  })();
-
-  return started;
+  }
+  throw new Error(`No free port in ${PREFERRED_PORT}–${PREFERRED_PORT + ATTEMPTS - 1}`);
 }
