@@ -86,6 +86,15 @@ instead (module height : plan width within one module, where perspective barely
 distorts) plus one assumed floor-to-floor, and say plainly that absolute scale is
 inferred.
 
+For this class, **solve the camera before trusting any measurement** — it is cheap and
+it is not optional, because the tilt alone can distort apparent proportions by tens of
+percent. Three image facts pin it: the horizon row (eye level), the slope of a known
+vertical edge (fixes the vertical vanishing point, hence focal length and tilt
+together), and one known height (fixes distance). Then verify by projecting one known
+point back into the image before building anything. Two runs on the same photo have
+produced wildly different cameras when this was improvised — it is a high-variance
+step precisely when it is done by feel.
+
 ## Step 2 — Measure the reference in pixels, never by eye
 
 Start with the shipped scanner — it does the silhouette, per-band floor-pitch
@@ -140,6 +149,20 @@ window.__measure()   // after a frame has painted
 Returns lit/shadow luma, their ratio, silhouette width fraction and banding contrast,
 each as a percentage of the reference target. Correct the largest error first. Typical
 convergence: archviz ≤7%, real photograph ≤15%.
+
+Two rules that keep the loop honest:
+
+- **The loop optimises only what it measures.** Anything without a number of its own
+  will be sacrificed to the things that have one. Give every identity feature its own
+  entry in `targets.notes` (a pitch, a count, a contrast — measured off the photo) and
+  re-check them every pass.
+- **One eye pass per numeric pass.** After correcting the largest measured error, look
+  at render and reference side by side at matched framing. Numbers can converge while
+  the picture diverges; the eye is the only detector for features the metrics miss.
+
+For exact-size render files (side-by-sides, external scoring), the dev server accepts
+`POST /__save-render {name, dataUrl}` and writes `renders/<name>` — read the canvas
+with `toDataURL()` and post it, never a screenshot (checklist item 27).
 
 Tuning map:
 - lit face too dark → raise sun intensity (not exposure, which lifts shadows too)
@@ -205,6 +228,10 @@ Tuning map:
     Seen on the White House. For low/wide buildings add subject-specific checks to
     `targets.notes` instead (silhouette width:height, bay pitch in px, baluster pitch)
     and verify them by scanning the RENDER the same way you scanned the photo.
+    It also saturates when the sky reference fails: the harness samples one sky pixel,
+    and against a strongly graded sky (dusk, haze) that mislabels half the frame.
+    Check the sky sample is representative before trusting `widthFrac` at all; if it
+    is not, score silhouettes with a per-row sky model instead.
 
 14. **Compare at the reference's own aspect ratio.** `resize_window` the viewer to match
     the photograph before scoring. A 1.5:1 reference judged in a square viewport cut the
@@ -264,6 +291,34 @@ Tuning map:
     different amounts on the two axes. Overlapping plain boxes produce that silhouette
     directly. Bonus: scaling a *notched* shaft plan up to base size also scales the
     notch geometry, which sprays pier artefacts; base blocks want their own plain plan.
+
+24. **One elevation cannot pin a plan.** Projected widths constrain a family of plans,
+    not one; attempting to solve plan angles in closed form from a single view leads
+    to contradictions and burned time. Parameterise the plan, fit the parameters
+    numerically against the measured projections, and record the ambiguity honestly
+    (state which alternative plans would render identically from this camera).
+
+25. **A member swept along a path needs an explicit reference direction.** Deriving
+    the frame from the tangent alone (Frenet-style) degenerates where the tangent
+    approaches the up axis — the member visibly twists or wobbles there. Pass a
+    stable "right"/normal direction in and re-orthogonalise per station.
+
+26. **A texture map multiplies the material colour.** Setting both a coloured map and
+    a coloured `material.color` darkens the product twice. Whichever one carries the
+    albedo, set the other to white.
+
+27. **Score against the drawing buffer, never a screenshot.** Screenshot pipelines
+    rescale: CSS pixels, device pixels and captured pixels are three different sizes,
+    and the failure is silent — the numbers are simply measured on a resampled image.
+    Read the canvas itself (or save it server-side) at its true size.
+
+28. **Read whether a profile is stepped or fair off the reference — then build it
+    that way.** Both failure directions have now been paid for: a stepped pinnacle
+    smoothed into a cone lost the building's identity, and a fair sail built by
+    linearly connecting measured waypoints gained kinks the photograph does not show.
+    Measured waypoints are *samples* of the profile, not its vertices: for a fair
+    profile, fit a smooth function through them; for a stepped one, model the steps.
+    The photograph, not the fitting convenience, decides which.
 
 ## Honesty requirements
 

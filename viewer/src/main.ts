@@ -31,7 +31,7 @@ controls.minDistance = 30;
 
 // ---------------------------------------------------------------- scene state
 let active: BuildingModel = MODELS[0];
-let activeView: View = MODELS[0].views.ref;
+let activeView: View = MODELS[0]?.views.ref ?? { pos: [60, 40, 90], target: [0, 20, 0], fov: 40 };
 let root: THREE.Group | null = null;
 let runtime: ModelRuntime;
 let sun: THREE.DirectionalLight | null = null;
@@ -190,6 +190,14 @@ Object.assign(window as unknown as Record<string, unknown>, {
 loadModel(MODELS[0]);
 
 renderer.setAnimationLoop(() => {
+  // Resize events are missed while the tab is hidden or during HMR, leaving the
+  // drawing buffer at a stale size — and every scoring pass then measures a
+  // resampled image. Cheaper to check every frame than to debug it again.
+  const size = renderer.getSize(new THREE.Vector2());
+  if (size.x !== innerWidth || size.y !== innerHeight) {
+    applyProjection(activeView);
+    renderer.setSize(innerWidth, innerHeight);
+  }
   controls.update();
   renderer.render(scene, camera);
   (window as unknown as { __ready: boolean }).__ready = true;

@@ -94,7 +94,7 @@ Two things make the numbers trustworthy, and both are easy to get wrong:
   subjects wider than the harness's 0.20W–0.90W scan window, which produces a *false*
   100 % match. The White House page shows exactly this trap and what to quote instead.
 
-The 23 failure modes that each cost a full review cycle are listed in
+The 28 failure modes that each cost a full review cycle are listed in
 [`skills/photo-to-threejs-building/SKILL.md`](skills/photo-to-threejs-building/SKILL.md).
 
 ---
