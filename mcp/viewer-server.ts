@@ -41,6 +41,23 @@ export async function ensureViewerServer(dir: string): Promise<string> {
   }
 
   const app = express();
+  // Chromium blocks a page on a public/secure origin from reaching a private
+  // address (127.0.0.1) unless the target opts in via a Private Network Access
+  // preflight. That block is invisible from inside an iframe, so it is one of
+  // the candidate causes of the blank panel; these headers remove it as a
+  // suspect and also unblock a browser tab fetching /__save-render.
+  app.use((req, res, next) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Private-Network", "true");
+    if (req.method === "OPTIONS") {
+      res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+      res.setHeader("Access-Control-Allow-Headers", "*");
+      res.setHeader("Access-Control-Max-Age", "600");
+      res.status(204).end();
+      return;
+    }
+    next();
+  });
   app.use(express.static(key));
 
   for (let i = 0; i < ATTEMPTS; i++) {

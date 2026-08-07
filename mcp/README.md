@@ -6,29 +6,69 @@ host agent — an MCP server cannot perform the reconstruction (the White House 
 
 | Tool | What it does |
 |---|---|
+| `classify_reference` | Evidence for Step 1: vertical-edge slopes, per-band pitch drift (the linearity test), end-pitch asymmetry (the two-faces falsification), silhouette taper. Hints, never a verdict |
 | `measure_reference` | Pixel measurement of a photograph: per-row-sky silhouette (gradient-proof in both axes), floor-pitch autocorrelation per height band, lit/shadow bands |
+| `solve_camera` | Vanishing points from lines **you** pick, with per-line residuals and a leave-one-out check; horizon, focal length, tilt/roll/yaw, eye height, metric distance, and a paste-ready Three.js camera block including `setViewOffset` |
+| `measure_pitch` | The same autocorrelation, aimed at a crop and an axis: floor and course spacing, baluster and bay rhythm, per-face end-pitch |
+| `compare_images` | Writes `overlay.png` / `wipe.png` / `edge_diff.png` and returns the full `score_render` numbers — the evidence pack every run used to hand-build |
 | `score_render` | Scans render and reference with the **same** detector: silhouette edge error (with per-band breakdown), area ratio, tip row, in-silhouette luma, sky gradient |
-| `open_viewer` | Serves a built viewer directory on localhost; shows it in an MCP App panel where the host supports one, and always returns the URL for a real browser |
+| `init_workspace` | Scaffolds `<dir>/viewer` with compilable model/scene stubs, placeholders loudly marked |
+| `open_viewer` | Serves a built viewer directory and shows it in an MCP App panel where the host supports one; always returns a localhost URL for a real browser |
+
+Every scanning tool takes an optional `crop` (original-image pixels) and reports
+coordinates back in full-image space. That parameter is the architecture in miniature:
+**judgement in the agent, determinism in the tool**. The margin-based detectors failed on
+4 of 4 real field photographs — dusk gradient, sea horizon, vegetation, hero-crop margins
+— not because the measurement was wrong but because nothing had aimed it. On the prefab
+house that defeated the scanner outright (5 usable rows), an aimed crop yields 279.
+
+**Crop only when the uncropped scan fails.** Measured across the five reference
+photographs, a crop is a power tool with a sharp edge: it rescues occluded margins
+(prefab 5 → 279 rows) and it *destroys* a scan that was already working — cropping Taipei
+101 tight to the tower left no sky at the margins at all and dropped 824 usable rows to 6.
+The rule is simple: run uncropped first, and reach for `crop` only when the evidence comes
+back empty or the silhouette is visibly picking up skyline and foreground rather than the
+subject. A badly aimed crop is reported as a failed detection, never as a fabricated
+measurement — but it is still a wasted pass.
 
 Plus the method itself as an MCP prompt: `reconstruct_from_photo` ships the full
 SKILL.md, wired to prefer these tools over hand-written scanners.
 
-Why exactly these tools: two independent acceptance-test runs (one bare agent, one with
-the skill) each spent real time rebuilding exactly this trio mid-run. And the two runs
-self-scored ~4–8 px with their own rulers while differing 5× under one ruler — *self-scores
-are not comparable across runs*, which is the whole case for a standard `score_render`.
-Its output has been validated against those runs' renders: rankings and magnitudes agree
-with the independent Python scorer they were first judged by.
+Why these tools and not others: the rule is that a capability earns a tool when **two or
+more independent runs hand-built it or burned >15 minutes on it**. One data point gets
+logged, not built. Camera algebra qualified loudly (one run ~40 minutes, another spiralled
+~30 through five re-derivations with sign slips); lighting debugging did not, and stayed
+knowledge rather than a tool. The two acceptance runs also self-scored ~4–8 px with their
+own rulers while differing 5× under one ruler — *self-scores are not comparable across
+runs*, which is the whole case for a standard `score_render`.
 
 ## What the panel is
 
-A thin frame around the real viewer — `open_viewer` serves the viewer over localhost and
-the panel iframes it, so there is one viewer implementation, not a panel fork that can
-drift. Host support varies (per-client, not per-vendor): Claude Desktop renders panels,
-Claude Code 2.1.x does not — which is why every result also carries the plain URL. The
-iframe needs the host to honour the declared `frameDomains` CSP for
-`http://127.0.0.1:5199`; when it doesn't, the panel says so and the open-in-browser
-button is the path.
+A window onto the real viewer, not a second engine that could drift. `open_viewer` gives
+the panel the viewer **inlined into one self-contained document**, delivered over the
+app→server channel (`get_viewer_bundle`, app-only visibility, so a multi-megabyte payload
+never enters the model's context) and rendered with `srcdoc`.
+
+That indirection is the fix for a bug that survived two attempts. The panel used to iframe
+`http://127.0.0.1:<port>` directly, and that load has four independent gates — the host
+honouring the declared `frameDomains`, the http scheme surviving inside a secure-context
+sandbox, Chromium's private-network block on a public page embedding `127.0.0.1`, and the
+served port matching what the CSP declared. Any one of them blanks the frame, and a
+CSP-blocked iframe still fires `load`, so the panel could not even tell which had shut.
+A `srcdoc` document has none of those gates: no origin, no port, no network. The localhost
+URL remains as the fallback path and for hosts with no panel at all.
+
+Host matrix for panels (per-client, not per-vendor):
+
+| Host | Panel |
+|---|---|
+| ext-apps reference host | ✅ |
+| Claude Desktop (chat) | ✅ renders |
+| Claude Desktop (Cowork) | ❌ identifies as `claude-code` |
+| Claude Code 2.1.x | ❌ never fetches the View |
+
+Because of that spread, every result also carries the plain URL, and the tool description
+tells the agent never to claim a panel is visible unless the user confirms it.
 
 ## Install
 
@@ -59,14 +99,18 @@ Claude Code):
 
 ## Typical loop
 
-1. `measure_reference` on the photograph — pitch per band, silhouette, bands.
-2. Agent authors `models/<id>.ts` + `scenes/<id>.ts` in a viewer workspace
-   (the skill's `assets/viewer-template/`, or this repo's `viewer/`).
-3. Save an exact-size render: the workspace dev server accepts
+1. `classify_reference`, then `measure_reference` on the photograph. If the evidence comes
+   back empty the margins are occluded — re-run with `crop`, don't proceed blind.
+2. `solve_camera` with 4–10 lines picked along real parallel families. Check
+   `cross_check.verdict` before building on the numbers: `weak` means a withheld line
+   missed its own vanishing point, and re-picking it is cheaper than debugging downstream.
+3. `init_workspace`, then author `models/<id>.ts` + `scenes/<id>.ts`, pasting the returned
+   camera block.
+4. Save an exact-size render: the workspace dev server accepts
    `POST /__save-render {name, dataUrl}` (never score a screenshot — they rescale).
-4. `score_render` render-vs-photo; fix the largest error; repeat. Identity features are
+5. `compare_images` photo-vs-render; fix the largest error; repeat. Identity features are
    not covered by the metrics — target them separately and check them by eye.
-5. `open_viewer` on the built workspace (`npm run build` → pass `dist/`).
+6. `open_viewer` on the built workspace (`npm run build` → pass `dist/`).
 
 ## Run standalone
 

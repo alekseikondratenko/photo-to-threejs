@@ -18,6 +18,7 @@
  * Everything here reports MEASUREMENTS, not conclusions.
  */
 import fs from "node:fs";
+import path from "node:path";
 import jpeg from "jpeg-js";
 import { PNG } from "pngjs";
 
@@ -40,6 +41,51 @@ export function decodeImage(path: string): Bitmap {
     return { w: img.width, h: img.height, data: new Uint8Array(img.data) };
   }
   throw new Error(`Unsupported image type: ${path} (png/jpg only)`);
+}
+
+/**
+ * A region of the ORIGINAL image, in original pixels.
+ *
+ * The division of labour this enables is the whole point: the agent decides
+ * where to look (judgement, and it is good at it — it crops by hand within
+ * minutes), the scanner measures what is there (determinism). The shipped
+ * sky-margin detectors failed on 4 of 4 real field photographs — dusk
+ * gradient, sea horizon, vegetation, hero-crop margins — not because the
+ * measurement was wrong but because nobody had aimed it.
+ */
+export interface Crop {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+export interface Cropped {
+  im: Bitmap;
+  /** Add these to any measured coordinate to return to full-image space. */
+  ox: number;
+  oy: number;
+}
+
+/** Clamp a crop to the image and cut it out; identity when no crop is given. */
+export function applyCrop(im: Bitmap, c?: Crop): Cropped {
+  if (!c) return { im, ox: 0, oy: 0 };
+  const x0 = Math.max(0, Math.min(im.w - 1, Math.round(Math.min(c.x0, c.x1))));
+  const x1 = Math.max(x0 + 1, Math.min(im.w, Math.round(Math.max(c.x0, c.x1))));
+  const y0 = Math.max(0, Math.min(im.h - 1, Math.round(Math.min(c.y0, c.y1))));
+  const y1 = Math.max(y0 + 1, Math.min(im.h, Math.round(Math.max(c.y0, c.y1))));
+  const w = x1 - x0, h = y1 - y0;
+  if (w < 8 || h < 8) {
+    throw new Error(
+      `Crop [${x0},${y0},${x1},${y1}] is ${w}x${h} px — too small to measure (need 8x8 or more)`,
+    );
+  }
+  const data = new Uint8Array(w * h * 4);
+  for (let y = 0; y < h; y++) {
+    const src = ((y + y0) * im.w + x0) * 4;
+    data.set(im.data.subarray(src, src + w * 4), y * w * 4);
+  }
+  return { im: { w, h, data }, ox: x0, oy: y0 };
 }
 
 /** Bilinear resize — good enough for silhouette work at comparable sizes. */
@@ -148,10 +194,21 @@ export function boundedRows(sil: SilRow[], w: number): number[] {
   return out;
 }
 
+/**
+ * Below this, an autocorrelation peak is as likely to be JPEG block structure
+ * or sensor noise as a real repeating element. Every consumer of a pitch must
+ * apply it — measuring it in one place and forgetting it in another is how a
+ * 5 px artefact became a confident "a second face is visible" claim on the
+ * Empire State photograph.
+ */
+export const NOISE_FLOOR_PX = 8;
+
 export interface PitchBand {
   band: "top" | "middle" | "bottom";
   rows: number;
   peaks: { pitch_px: number; score: number }[];
+  /** Strongest peak is at or under the noise floor — do not build on it. */
+  unreliable?: boolean;
 }
 
 /** Banded autocorrelation of a vertical luminance profile down the subject. */
@@ -175,7 +232,12 @@ export function floorPitch(im: Bitmap, sil: SilRow[]): PitchBand[] {
       prof.push(sum / Math.max(1, n));
     }
     const peaks = autocorrPeaks(prof);
-    if (peaks !== null) out.push({ band: names[b], rows: prof.length, peaks });
+    if (peaks !== null) {
+      const band: PitchBand = { band: names[b], rows: prof.length, peaks };
+      const best = peaks[0]?.pitch_px;
+      if (best !== undefined && best < NOISE_FLOOR_PX) band.unreliable = true;
+      out.push(band);
+    }
   }
   return out;
 }
@@ -236,8 +298,9 @@ export function bandStats(im: Bitmap, sil: SilRow[]) {
   };
 }
 
-export function measureImage(path: string) {
-  const im = decodeImage(path);
+export function measureImage(path: string, crop?: Crop) {
+  const full = decodeImage(path);
+  const { im, ox, oy } = applyCrop(full, crop);
   const sil = silhouette(im);
   const bounded = boundedRows(sil, im.w);
   const widths = bounded.map((y) => sil[y].width);
@@ -245,19 +308,191 @@ export function measureImage(path: string) {
     .map((r, y) => ({ r, y }))
     .filter(({ r }) => r.width > im.w * 0.05)
     .map(({ y }) => y);
+  const top = subjectRows[0], bottom = subjectRows[subjectRows.length - 1];
   return {
     image: path,
-    size: [im.w, im.h],
+    size: [full.w, full.h],
+    // Rows come back in FULL-image space so they stay comparable with every
+    // other measurement of this photograph, cropped or not.
+    scanned_region: crop ? { x0: ox, y0: oy, x1: ox + im.w, y1: oy + im.h } : null,
     aspect: Math.round((im.w / im.h) * 10000) / 10000,
-    subject_top_row: subjectRows[0] ?? null,
-    subject_bottom_row: subjectRows[subjectRows.length - 1] ?? null,
+    subject_top_row: top === undefined ? null : top + oy,
+    subject_bottom_row: bottom === undefined ? null : bottom + oy,
     sky_bounded_rows: bounded.length,
     median_width_px: median(widths),
     floor_pitch: floorPitch(im, sil),
     bands: bandStats(im, sil),
     notes:
       "Pitch that drifts between bands = non-linear perspective; use local ratios. " +
-      "Fine pitches near the JPEG noise floor need a magnified band-local crop.",
+      "Fine pitches near the JPEG noise floor need a magnified band-local crop. " +
+      (crop
+        ? "Rows are in full-image coordinates; widths are within the crop."
+        : "Few sky-bounded rows on a cluttered photograph means the detector could not " +
+          "see, not that the subject is absent — re-run with a crop that excludes the " +
+          "occluding foreground."),
+  };
+}
+
+/**
+ * measure_pitch core: autocorrelation, aimed.
+ *
+ * `floorPitch` autocorrelates down the whole subject, which answers "what is
+ * the floor rhythm" and nothing else. The recurring field need is the same
+ * measurement pointed at a chosen region and axis — baluster spacing, tile
+ * courses, bay rhythm, and the per-face end-pitch comparison (call twice with
+ * two crops). Same engine, aimable.
+ */
+export function measurePitch(path: string, axis: "vertical" | "horizontal", crop?: Crop) {
+  const full = decodeImage(path);
+  const { im, ox, oy } = applyCrop(full, crop);
+
+  // "vertical" means the rhythm runs down the image (floors, courses), so the
+  // profile is one luma sample per ROW; "horizontal" is per column.
+  const prof: number[] = [];
+  if (axis === "vertical") {
+    for (let y = 0; y < im.h; y++) {
+      let s = 0;
+      for (let x = 0; x < im.w; x++) { const p = px(im, x, y); s += luma(p[0], p[1], p[2]); }
+      prof.push(s / im.w);
+    }
+  } else {
+    for (let x = 0; x < im.w; x++) {
+      let s = 0;
+      for (let y = 0; y < im.h; y++) { const p = px(im, x, y); s += luma(p[0], p[1], p[2]); }
+      prof.push(s / im.h);
+    }
+  }
+
+  const peaks = autocorrPeaks(prof);
+  const span = prof.length;
+  const best = peaks?.[0]?.pitch_px;
+  const warnings: string[] = [];
+  if (peaks === null) {
+    warnings.push(
+      `profile is ${span} samples — autocorrelation needs 30+; enlarge the crop along the ${axis} axis`,
+    );
+  } else if (peaks.length === 0) {
+    warnings.push(
+      "no repeating rhythm found — either there is none here, or the contrast is too low; " +
+      "try a crop tight on the repeating elements only",
+    );
+  }
+  if (best !== undefined && best < 8) {
+    warnings.push(
+      `strongest pitch is ${best} px, at or below the JPEG noise floor (~8 px) — treat as ` +
+      "unreliable; measure it on a magnified crop of a few units and divide instead",
+    );
+  }
+  if (best !== undefined && best > span / 3) {
+    warnings.push(
+      `strongest pitch (${best} px) spans more than a third of the ${span} px profile — ` +
+      "fewer than ~3 repeats is not a rhythm, it is a coincidence",
+    );
+  }
+
+  return {
+    image: path,
+    axis,
+    size: [full.w, full.h],
+    scanned_region: { x0: ox, y0: oy, x1: ox + im.w, y1: oy + im.h },
+    profile_samples: span,
+    peaks: peaks ?? [],
+    units_across_span: best ? Math.round((span / best) * 10) / 10 : null,
+    warnings,
+    notes:
+      "Pitch is in ORIGINAL image pixels along the chosen axis. A pitch measured on a " +
+      "perspective-compressed region is a local value — do not extrapolate it across the " +
+      "whole facade without checking a second band.",
+  };
+}
+
+/** Write an RGBA bitmap out as a PNG. */
+function writePng(file: string, im: Bitmap): void {
+  const png = new PNG({ width: im.w, height: im.h });
+  png.data = Buffer.from(im.data);
+  fs.writeFileSync(file, PNG.sync.write(png));
+}
+
+const clone = (im: Bitmap): Bitmap => ({ w: im.w, h: im.h, data: new Uint8Array(im.data) });
+
+function setPx(im: Bitmap, x: number, y: number, c: [number, number, number]): void {
+  if (x < 0 || y < 0 || x >= im.w || y >= im.h) return;
+  const i = (y * im.w + x) * 4;
+  im.data[i] = c[0]; im.data[i + 1] = c[1]; im.data[i + 2] = c[2]; im.data[i + 3] = 255;
+}
+
+/**
+ * compare_images core: the evidence pack, in one call.
+ *
+ * Every run so far hand-built these — blends, wipes, side-by-sides — and the
+ * building of them is not where the thinking is. Three images, because each
+ * answers a different question: the blend shows drift everywhere at once, the
+ * wipe shows detail alignment without transparency muddying it, and the edge
+ * plot isolates silhouette disagreement from shading disagreement.
+ */
+export function compareImages(imageA: string, imageB: string, outDir: string) {
+  const a = decodeImage(imageA);
+  const b = resize(decodeImage(imageB), a.w, a.h);
+  fs.mkdirSync(outDir, { recursive: true });
+
+  const overlay = clone(a);
+  for (let i = 0; i < overlay.data.length; i += 4) {
+    for (let c = 0; c < 3; c++) overlay.data[i + c] = (a.data[i + c] + b.data[i + c]) >> 1;
+    overlay.data[i + 3] = 255;
+  }
+
+  const wipe = clone(a);
+  const split = a.w >> 1;
+  for (let y = 0; y < a.h; y++) {
+    for (let x = split; x < a.w; x++) {
+      const i = (y * a.w + x) * 4;
+      for (let c = 0; c < 3; c++) wipe.data[i + c] = b.data[i + c];
+      wipe.data[i + 3] = 255;
+    }
+    setPx(wipe, split, y, [255, 230, 0]);
+  }
+
+  // Both silhouettes on A: A's edges cyan, B's magenta. Where they coincide
+  // the magenta lands on top of the cyan — agreement reads as one colour.
+  const sA = silhouette(a);
+  const sB = silhouette(b);
+  const edge = clone(a);
+  for (let y = 0; y < a.h; y++) {
+    for (const [s, col] of [[sA, [0, 220, 255]], [sB, [255, 0, 200]]] as [SilRow[], [number, number, number]][]) {
+      const r = s[y];
+      if (r.width <= 0) continue;
+      for (const x of [r.left, r.right]) {
+        setPx(edge, x, y, col);
+        setPx(edge, x + 1, y, col);
+      }
+    }
+  }
+
+  const paths = {
+    overlay: path.join(outDir, "overlay.png"),
+    wipe: path.join(outDir, "wipe.png"),
+    edge_diff: path.join(outDir, "edge_diff.png"),
+  };
+  writePng(paths.overlay, overlay);
+  writePng(paths.wipe, wipe);
+  writePng(paths.edge_diff, edge);
+
+  return {
+    imageA,
+    imageB,
+    compared_at: [a.w, a.h],
+    images: paths,
+    legend: {
+      overlay: "50% blend — ghosting shows where the two disagree, everywhere at once",
+      wipe: `left half A, right half B, split at x=${split} (yellow line)`,
+      edge_diff: "A as base; A silhouette cyan, B silhouette magenta — one colour = agreement",
+    },
+    // The numbers and the pictures come from the SAME detector, so a defect
+    // you can see in edge_diff is the defect the score is counting.
+    score: scoreImages(imageB, imageA),
+    notes:
+      "B is resized to A before comparison. A is the base/reference; pass the photograph " +
+      "as imageA and the render as imageB to keep the score's sign conventions meaningful.",
   };
 }
 
@@ -266,8 +501,9 @@ export function measureImage(path: string) {
  * Reports MEASUREMENTS with hints, never a bare verdict — classification is
  * Step 1's judgement; this makes the judgement cheap and grounded.
  */
-export function classifyReference(path: string) {
-  const im = decodeImage(path);
+export function classifyReference(path: string, crop?: Crop) {
+  const full = decodeImage(path);
+  const { im, ox, oy } = applyCrop(full, crop);
   const sil = silhouette(im);
   const allRows = boundedRows(sil, im.w);
   const pitch = floorPitch(im, sil);
@@ -333,33 +569,89 @@ export function classifyReference(path: string) {
   if (rows.length < 20) {
     hints.push(
       "sky-bounded detection failed (occluded or cluttered margins) — the numeric " +
-      "evidence below is unavailable; classify by eye per Step 1 and say so",
+      "evidence below is unavailable; classify by eye per Step 1 and say so" +
+      (crop
+        ? ", or move the crop off the occluding foreground"
+        : ". Aim it: re-run with `crop` around the clear part of the subject — that " +
+          "converts a blind detector into a measured one"),
     );
   }
+  // Does the silhouette narrow towards the top? If so its side edges are a
+  // roof or a taper, not walls, and their slope says nothing about camera
+  // tilt. Worth testing explicitly: a gable seen through a crop produces the
+  // exact convergence signature of a tilted camera, and the two calls for
+  // opposite responses.
+  let taper: number | null = null;
+  if (rows.length > 40) {
+    const w = (ys: number[]) => median(ys.map((y) => sil[y].width));
+    const topW = w(rows.slice(0, Math.max(4, (rows.length * 0.2) | 0)));
+    const botW = w(rows.slice(-Math.max(4, (rows.length * 0.2) | 0)));
+    if (botW > 0) taper = Math.round((topW / botW) * 1000) / 1000;
+  }
+  const tapers = taper !== null && taper < 0.75;
+
   if (leftSlope !== null && rightSlope !== null) {
     if (Math.abs(leftSlope) < 0.02 && Math.abs(rightSlope) < 0.02) {
       hints.push("verticals ~parallel: no tilt — archviz/elevated behaviour, shifted lens possible");
     } else if (leftSlope < -0.03 && rightSlope > 0.03) {
-      hints.push("edges converge upward: tilted ground-level camera — solve the camera before measuring");
+      hints.push(
+        tapers
+          ? `edges converge upward, but the silhouette is only ${Math.round(taper! * 100)}% as wide ` +
+            "at the top as at the bottom — these side edges are a ROOF SLOPE or a taper, not " +
+            "walls, so this says nothing about camera tilt. Judge tilt from the wall verticals " +
+            "instead (crop below the eaves and re-run)."
+          : "edges converge upward: tilted ground-level camera — solve the camera before measuring",
+      );
     }
   }
   const strongest = (b?: PitchBand) => b?.peaks?.[0]?.pitch_px;
   const top = strongest(pitch.find((b) => b.band === "top"));
   const bottom = strongest(pitch.find((b) => b.band === "bottom"));
-  if (top && bottom && Math.abs(bottom / top - 1) > 0.15) {
+  const solid = (v?: number): v is number => v !== undefined && v >= NOISE_FLOOR_PX;
+  if (solid(top) && solid(bottom) && Math.abs(bottom / top - 1) > 0.15) {
     hints.push(`vertical pitch drifts ${top}→${bottom} px between bands: non-linear perspective — use local ratios, not one global scale`);
+  } else if ((top !== undefined && top < NOISE_FLOOR_PX) || (bottom !== undefined && bottom < NOISE_FLOOR_PX)) {
+    hints.push(
+      `a band's strongest pitch (${[top, bottom].filter((v) => v !== undefined && v < NOISE_FLOOR_PX).join(", ")} px) is at the ` +
+      `~${NOISE_FLOOR_PX} px noise floor, so the linearity test is inconclusive there — ` +
+      "re-measure that band with measure_pitch on a magnified crop before concluding anything",
+    );
   }
+
   const epL = endPitch?.left?.[0]?.pitch_px, epR = endPitch?.right?.[0]?.pitch_px;
-  if (epL && epR && Math.abs(epL / epR - 1) > 0.15) {
+  const epRatio = solid(epL) && solid(epR) ? Math.max(epL, epR) / Math.min(epL, epR) : null;
+  if (epRatio !== null && epRatio > 4) {
+    // Foreshortening between two faces of one building is a factor of ~1.2–3.
+    // Beyond 4x the two ends are not measuring the same kind of thing — one
+    // is picking up a different feature, or sky, or noise.
+    hints.push(
+      `end pitches differ by ${Math.round(epRatio * 10) / 10}x (${epL} vs ${epR} px), which is too ` +
+      "extreme for perspective between two faces of one building — one end is likely " +
+      "measuring a different feature or empty sky. Treat the two-faces question as open " +
+      "and test it with measure_pitch (axis 'horizontal') on each end separately.",
+    );
+  } else if (epRatio !== null && Math.abs(epL! / epR! - 1) > 0.15) {
     hints.push(`repeating-unit pitch differs between ends (${epL} vs ${epR} px): a second face is likely visible — run the corner→yaw recipe`);
+  } else if ((epL !== undefined && epL < NOISE_FLOOR_PX) || (epR !== undefined && epR < NOISE_FLOOR_PX)) {
+    // The asymmetry test compares two numbers; if either is noise the ratio
+    // between them is noise too, however large and convincing it looks.
+    hints.push(
+      `end-pitch comparison skipped: one end measured ${Math.min(epL ?? 99, epR ?? 99)} px, at the ` +
+      `~${NOISE_FLOOR_PX} px noise floor. The ratio would be meaningless — aim measure_pitch ` +
+      "(axis 'horizontal') at each end separately to test for a second face.",
+    );
   }
 
   return {
     image: path,
-    size: [im.w, im.h],
+    size: [full.w, full.h],
+    scanned_region: crop ? { x0: ox, y0: oy, x1: ox + im.w, y1: oy + im.h } : null,
     evidence: {
       sky_bounded_rows: rows.length,
       vertical_edge_slopes: { left: leftSlope, right: rightSlope },
+      /** Top width / bottom width. Well under 1 means the side edges are a
+       *  roof or taper, so their slope is not evidence about camera tilt. */
+      silhouette_taper_top_over_bottom: taper,
       vertical_pitch_bands: pitch,
       end_pitch_mid_band: endPitch,
     },
