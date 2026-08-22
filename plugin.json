@@ -1,0 +1,12 @@
+{
+  "name": "photo-to-threejs-building",
+  "version": "0.5.0",
+  "description": "Rebuild a building from one photograph as a procedural, measured Three.js model. Agent Skill (the method: measure, solve the camera, build, score against the photograph's own pixels) + MCP server (the deterministic instruments: view_crop, trace_edge, solve_camera, measure_pitch, compare_images, score_render, an auto-scoring workspace scaffold, and an inline viewer panel). The skill governs; the tools execute.",
+  "author": {
+    "name": "Aleksei Kondratenko",
+    "url": "https://github.com/alekseikondratenko/photo-to-threejs"
+  },
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/alekseikondratenko/photo-to-threejs",
+  "agentPlugins": "0.1"
+}

@@ -1,5 +1,9 @@
 node_modules/
 dist/
+# ...except the server bundle + panel the plugin ships prebuilt:
+!mcp/dist/
+!mcp/dist/server.mjs
+!mcp/dist/mcp-app.html
 .DS_Store
 *.log
 handshake.log

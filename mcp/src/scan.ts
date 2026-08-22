@@ -501,7 +501,7 @@ export function compareImages(imageA: string, imageB: string, outDir: string) {
  * Reports MEASUREMENTS with hints, never a bare verdict — classification is
  * Step 1's judgement; this makes the judgement cheap and grounded.
  */
-export function classifyReference(path: string, crop?: Crop) {
+export function classifyReference(path: string, crop?: Crop): Record<string, unknown> {
   const full = decodeImage(path);
   const { im, ox, oy } = applyCrop(full, crop);
   const sil = silhouette(im);
@@ -642,6 +642,38 @@ export function classifyReference(path: string, crop?: Crop) {
     );
   }
 
+  // Failed first contact loses the agent — the field run that saw "5 usable
+  // rows" never called this tool again and rebuilt its own scanners. So when
+  // the full-frame scan is blind and nobody aimed us, aim ourselves: retry on
+  // interior crops (occluders live at the margins) and keep the best answer.
+  // Judgement still beats this — an agent-aimed crop found 279 rows where the
+  // best auto-crop finds fewer — but a partial answer keeps the conversation
+  // going where a blind failure ended it.
+  if (!crop && rows.length < 20) {
+    let best: { result: Record<string, unknown>; rows: number; region: Crop } | null = null;
+    for (const inset of [0.12, 0.24]) {
+      const region: Crop = {
+        x0: full.w * inset, y0: full.h * inset,
+        x1: full.w * (1 - inset), y1: full.h * (1 - inset),
+      };
+      const candidate = classifyReference(path, region);
+      const cRows = (candidate.evidence as { sky_bounded_rows: number }).sky_bounded_rows;
+      if (cRows >= 20 && (!best || cRows > best.rows)) best = { result: candidate, rows: cRows, region };
+    }
+    if (best) {
+      const r = best.result;
+      (r.hints as string[]).unshift(
+        `full-frame scan was blind (${rows.length} usable rows — occluded margins); this result ` +
+        `comes from an automatic interior crop [${Math.round(best.region.x0)},${Math.round(best.region.y0)},` +
+        `${Math.round(best.region.x1)},${Math.round(best.region.y1)}] which found ${best.rows}. ` +
+        "An aimed crop around the clear part of the subject will beat this — re-run with `crop` if " +
+        "these numbers look partial.",
+      );
+      r.auto_cropped = true;
+      return r;
+    }
+  }
+
   return {
     image: path,
     size: [full.w, full.h],
@@ -660,6 +692,55 @@ export function classifyReference(path: string, crop?: Crop) {
       "Evidence, not a verdict: Step 1 owns the classification. Missing evidence " +
       "(few sky-bounded rows, no repeating elements) means the detectors could not " +
       "see — not that the property is absent.",
+  };
+}
+
+/**
+ * Per-column skyline — the TRANSPOSE of the row-wise silhouette. Wide
+ * subjects (houses) are sky-bounded in almost no rows, so the row scan comes
+ * back empty on them while a column scan of the same image yields hundreds of
+ * comparable columns. Field-discovered (the run's silh.py); also lives in the
+ * workspace gate's scripts/score.mjs — keep the two in step.
+ */
+function skyline(im: Bitmap, tol = 42): number[] {
+  const out = new Array<number>(im.w).fill(-1);
+  const yMax = Math.min(14, im.h);
+  for (let x = 0; x < im.w; x++) {
+    const ch: number[][] = [[], [], []];
+    for (let y = 2; y < yMax; y++) {
+      const p = px(im, x, y);
+      ch[0].push(p[0]); ch[1].push(p[1]); ch[2].push(p[2]);
+    }
+    const sky = [median(ch[0]), median(ch[1]), median(ch[2])];
+    let run = 0;
+    for (let y = 2; y < im.h; y++) {
+      const p = px(im, x, y);
+      const d = Math.hypot(p[0] - sky[0], p[1] - sky[1], p[2] - sky[2]);
+      run = d > tol ? run + 1 : 0;
+      if (run >= 4) { out[x] = y - 3; break; }
+    }
+  }
+  return out;
+}
+
+function skylineScore(ref: Bitmap, ren: Bitmap) {
+  const a = skyline(ref), b = skyline(ren);
+  const errs: number[] = [];
+  for (let x = Math.round(ref.w * 0.03); x < ref.w * 0.97; x++) {
+    if (a[x] >= 0 && b[x] >= 0) errs.push(Math.abs(a[x] - b[x]));
+  }
+  if (!errs.length) return null;
+  const mean = (v: number[]) => (v.length ? Math.round((v.reduce((s, e) => s + e, 0) / v.length) * 10) / 10 : null);
+  const third = Math.floor(errs.length / 3);
+  return {
+    mean_top_error_px: mean(errs),
+    top_error_by_band: {
+      left: mean(errs.slice(0, third)),
+      middle: mean(errs.slice(third, 2 * third)),
+      right: mean(errs.slice(2 * third)),
+    },
+    max_top_error_px: Math.max(...errs),
+    columns_compared: errs.length,
   };
 }
 
@@ -752,6 +833,10 @@ export function scoreImages(renderPath: string, refPath: string) {
       area_ratio: Math.round((area(sRen) / Math.max(1, area(sRef))) * 1000) / 1000,
       top_row: { ref: refTop, render: renTop, delta: refTop !== null && renTop !== null ? renTop - refTop : null },
     },
+    // Column-wise skyline — the primary silhouette signal on wide/occluded
+    // subjects where rows_compared is small. Trust the axis that compared
+    // more of the subject.
+    skyline: skylineScore(ref, ren),
     in_silhouette_luma: { ref: inLuma(ref, sRef), render: inLuma(ren, sRen) },
     // Shared vocabulary with the viewer's __measure(): lit/shadow band luma and
     // their ratio, so the skill's Step 4 tuning map applies to this output too.

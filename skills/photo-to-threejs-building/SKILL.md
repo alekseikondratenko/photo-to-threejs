@@ -8,6 +8,39 @@ description: Rebuild a building from a single reference photograph or archviz re
 Rebuild the building in a reference image as procedural Three.js code, then **score the
 render against the reference numerically** and correct until the numbers converge.
 
+## The working ledger — RECON.md, before anything else
+
+Keep ONE file, `RECON.md`, next to the workspace (init_workspace scaffolds it; create it
+by hand otherwise) and **rewrite it at every step**:
+
+- **Verified** — measurements WITH their evidence ("eave y=2.95 m — gutter rows + rake
+  unprojection agree").
+- **Assumed** — working values with their source ("storey 2.85 m, standard").
+- **REFUTED** — hypotheses killed, with what killed them. **Once buried, they stay
+  dead** — re-litigating settled questions cost one observed run three separate
+  re-investigations of the same roof step.
+- **Camera** — the accepted solve, pasted verbatim.
+- **Score history** — one row per scored render pass.
+
+Read it before re-deriving anything: a fact not recorded here WILL be re-measured, and
+that re-measurement will not agree pixel-for-pixel with the first one, and reconciling
+the two will cost more than the ledger ever does. The ledger is also the run's audit
+trail — hand it over at the end instead of a transcript.
+
+## The loop grammar
+
+The whole method is one loop, and each pass has the same grammar:
+
+1. **Predict** — say (in RECON.md) what the change should do to the numbers.
+2. **Act** — make the change; save a render via `POST /__save-render`.
+3. **Read the grade** — the save response carries the score (the endpoint scores every
+   save automatically; there is no unscored render). Log it in Score history.
+4. **Fix the largest measured error next.** One eye pass per numeric pass.
+
+Stop when the targets hold and the eye pass finds nothing the metrics missed. Never
+iterate on eyeballed screenshots — an observed run scored once, eyeballed for an hour,
+and did not converge.
+
 There is no reconstruction algorithm here and no ML. The 3D comes from you writing
 TypeScript that composes primitives and swept paths. What makes it reliable is not
 better guessing — it is **measuring instead of eyeballing**, at both ends: measure the
@@ -60,6 +93,8 @@ Either way, the files that matter:
 | `src/scenes/*.ts` | Per-building camera/lighting/targets. Add a new building here + `models/`. |
 | `scripts/measure_reference.py` | *(in this skill)* Deterministic reference scan: silhouette, floor-pitch autocorrelation per band, lit/shadow bands. Run it before hand-measuring; read its docstring for known limits. |
 | `references/casebook.md` | *(in this skill)* The worked measurement stories — every subject's numbers, procedures and failures, including a corner view modelled frontal. **Standalone installs: this is your substitute for the repo-only model files above.** |
+| `references/roof-geometry.md` | *(in this skill)* Pitched-roof cookbook: Zwerchgiebel flush-vs-projecting test, valleys, Wangen, verge-overhang offsets, pitch from rake VPs, the stepped-eave decision tree. **Read it BEFORE fighting any cross-gable** — every fact in it was re-derived from pixels by two runs at 15–20 min each. |
+| `references/scale-anchors.md` | *(in this skill)* Standard-dimension anchor table (door 2.0 m, window head 2.135 m, Traufhöhe by storey class), the 1.5-storey test, and the sanity checks that catch a wrong anchor before it poisons the run. **Read it BEFORE converting any ratio to metres.** |
 
 Run it: `cd viewer && npm run dev`. Vite asks for 5200 and auto-increments if it is
 taken — **the URL vite prints is the truth**; never assume the documented port, and
@@ -129,6 +164,25 @@ Three worked camera solves, as recipes (numbers in `references/casebook.md`):
 - **Ground ellipse → distance.** Any circular ground feature (fountain, plaza ring)
   images as an ellipse whose minor:major axis ratio equals eye height : distance. One
   measurement pins the standoff.
+
+## If the photo-to-threejs MCP server is available — the instruments
+
+When this skill arrives alongside the MCP server (the plugin ships both), the
+deterministic steps are tool calls, not scripts you write:
+
+| Need | Tool | The rule that matters |
+|---|---|---|
+| Look closely, keep coordinates | `view_crop` | magnified crop with a labelled pixel grid — read positions off the zoom |
+| An edge as numbers | `trace_edge` | eyes locate the edge, the tool reads it off; feeds `solve_camera` directly |
+| The camera | `solve_camera` | **call it EARLY with rough lines** — 'weak' + a named worst line IS the workflow; iterate through the residuals, 2–3 calls. Never derive vanishing points by hand, and never "collect confident lines first" (measured cost of that strategy: a 30-minute detour the solver then confirmed in one call) |
+| Any repeating rhythm | `measure_pitch` | aimable autocorrelation, warns at the noise floor |
+| Numeric Step-1 hints | `classify_reference` | one witness, never the verdict; weak on wide/occluded subjects and says so |
+| The workspace | `init_workspace` | scaffolds the viewer, RECON.md, and the auto-scoring save endpoint |
+| Evidence pack + score | `compare_images` | overlay/wipe/edge-diff + the full score block, every pass |
+| Delivery | `open_viewer` | the run is not done until this has been called on the built workspace |
+
+Without the server, the same steps run on this skill's scripts (`measure_reference.py`)
+and hand-written scans — the method is identical, only slower.
 
 ## Step 2 — Measure the reference in pixels, never by eye
 
@@ -262,9 +316,13 @@ Two rules that keep the loop honest:
   failed deliverable — one model run produced exactly that and was disqualified on
   sight.
 
-For exact-size render files (side-by-sides, external scoring), the dev server accepts
-`POST /__save-render {name, dataUrl}` and writes `renders/<name>` — read the canvas
-with `toDataURL()` and post it, never a screenshot (checklist item 27).
+For exact-size render files, the dev server accepts `POST /__save-render {name, dataUrl}`
+and writes `renders/<name>` — read the canvas with `toDataURL()` and post it, never a
+screenshot (checklist item 27). **The endpoint scores every save automatically** against
+the reference in `public/` and returns the numbers in the response (also written to
+`renders/<name>.score.json`): row-wise silhouette AND column-wise skyline — on wide
+subjects trust the skyline block (`rows_compared` small means the row scan was blind,
+not that the model is right). Log every pass in RECON.md's Score history.
 
 Tuning map:
 - lit face too dark → raise sun intensity (not exposure, which lifts shadows too)

@@ -108,6 +108,35 @@ export const ${id}: BuildingModel = {
 };
 `;
 
+const reconStub = (id: string, referencePublic: string) => `# RECON — ${id}
+
+The working ledger. Rewrite it every step; read it before re-deriving anything.
+A fact not recorded here will be re-measured; a hypothesis not buried here will
+be resurrected. (Both happened, repeatedly, in the run that motivated this file.)
+
+## Verified
+<!-- measurements with their evidence: "eave y=2.95 m — gutter rows 549-551 + rake unprojection agree" -->
+
+## Assumed
+<!-- working values without direct evidence, each with its source: "storey height 2.85 m (standard)" -->
+
+## REFUTED
+<!-- hypotheses killed, WITH the evidence that killed them. Once here, they stay dead. -->
+
+## Camera
+<!-- paste the solve_camera result (or its summary) here verbatim once verdict != inconsistent -->
+
+## Next tests
+<!-- what would change your mind about the current reading -->
+
+## Score history
+<!-- the save-render gate scores every saved render automatically; log each pass: -->
+| pass | render | mean_edge_px | area_ratio | worst band | what was fixed |
+|---|---|---|---|---|---|
+
+Reference: \`${referencePublic}\`
+`;
+
 export function initWorkspace(dir: string, subjectId: string, referenceImage?: string) {
   const id = subjectId.replace(/[^a-zA-Z0-9]/g, "");
   if (!id) throw new Error("subjectId must contain letters/digits");
@@ -121,14 +150,35 @@ export function initWorkspace(dir: string, subjectId: string, referenceImage?: s
   }
   for (const d of ["models", "scenes"]) fs.mkdirSync(path.join(viewer, "src", d), { recursive: true });
 
+  // The reference must be servable by the browser AND findable by the scoring
+  // gate. A filesystem path written into the scene verbatim satisfies neither
+  // (a field run had to fix that by hand) — so when we are handed a real file,
+  // copy it into public/ and reference it by URL path.
+  let referenceRef = referenceImage ?? `/${id}-reference.jpg`;
+  if (referenceImage && fs.existsSync(referenceImage) && path.isAbsolute(referenceImage)) {
+    const pub = path.join(viewer, "public");
+    fs.mkdirSync(pub, { recursive: true });
+    const ext = path.extname(referenceImage).toLowerCase() || ".jpg";
+    const dest = path.join(pub, `${id}-reference${ext}`);
+    fs.copyFileSync(referenceImage, dest);
+    referenceRef = `/${id}-reference${ext}`;
+    created.push(`viewer/public/${id}-reference${ext} (copied for the browser + scoring gate)`);
+  }
+
   const modelPath = path.join(viewer, "src", "models", `${id}.ts`);
   const scenePath = path.join(viewer, "src", "scenes", `${id}.ts`);
   if (fs.existsSync(modelPath) || fs.existsSync(scenePath)) {
     throw new Error(`subject '${id}' already exists in ${viewer}`);
   }
   fs.writeFileSync(modelPath, modelStub(id, pascal));
-  fs.writeFileSync(scenePath, sceneStub(id, pascal, referenceImage ?? `/${id}-reference.jpg`));
+  fs.writeFileSync(scenePath, sceneStub(id, pascal, referenceRef));
   created.push(`viewer/src/models/${id}.ts`, `viewer/src/scenes/${id}.ts`);
+
+  const reconPath = path.join(dir, "RECON.md");
+  if (!fs.existsSync(reconPath)) {
+    fs.writeFileSync(reconPath, reconStub(id, referenceRef));
+    created.push("RECON.md (the working ledger — rewrite it every step)");
+  }
 
   // Register in main.ts: add the import and append to MODELS.
   const mainPath = path.join(viewer, "src", "main.ts");
@@ -156,6 +206,9 @@ export function initWorkspace(dir: string, subjectId: string, referenceImage?: s
     next:
       "npm install in viewer/, then npm run dev — vite prints the URL (it may not be " +
       "5200; the printed URL is the truth). Replace the stub's placeholder numbers with " +
-      "measured values before scoring anything.",
+      "measured values before scoring anything. Every render saved via POST /__save-render " +
+      "is scored against the reference automatically — the score comes back in the save " +
+      "response and lands in renders/<name>.score.json; log each pass in RECON.md and fix " +
+      "the largest error first.",
   };
 }

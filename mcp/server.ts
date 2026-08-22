@@ -28,6 +28,7 @@ import { z } from "zod";
 import { logHandshake } from "./log.ts";
 import { inlineViewer } from "./src/bundle.ts";
 import { solveCamera } from "./src/camera.ts";
+import { traceEdge, viewCrop } from "./src/instruments.ts";
 import { BUNDLE_META } from "./src/protocol.ts";
 import {
   classifyReference,
@@ -41,7 +42,9 @@ import { initWorkspace } from "./src/workspace.ts";
 import { ensureViewerServer, PREFERRED_PORT } from "./viewer-server.ts";
 
 const HERE = import.meta.dirname;
-const DIST_DIR = path.join(HERE, "dist");
+// Source layout: mcp/dist/mcp-app.html relative to mcp/server.ts.
+// Bundled layout: the bundle itself lives IN mcp/dist, next to mcp-app.html.
+const DIST_DIR = fs.existsSync(path.join(HERE, "dist", "mcp-app.html")) ? path.join(HERE, "dist") : HERE;
 const PANEL_URI = "ui://photo-to-threejs/viewer-panel.html";
 
 /**
@@ -65,6 +68,7 @@ const PANEL_CSP = {
 function skillText(): string {
   const candidates = [
     path.join(HERE, "..", "skills", "photo-to-threejs-building", "SKILL.md"),
+    path.join(HERE, "..", "..", "skills", "photo-to-threejs-building", "SKILL.md"), // bundled in mcp/dist
     path.join(HERE, "SKILL.md"),
   ];
   for (const p of candidates) {
@@ -99,18 +103,20 @@ const CROP = z
   );
 
 export function createServer(): McpServer {
-  const server = new McpServer({ name: "photo-to-threejs", version: "0.4.0" });
+  const server = new McpServer({ name: "photo-to-threejs", version: "0.5.0" });
 
   server.registerTool(
     "classify_reference",
     {
       title: "Classify a reference photograph (evidence, not verdict)",
       description:
-        "Run FIRST, before measuring: reports vertical-edge slopes (tilt/parallel verticals), " +
-        "per-band pitch drift (the linearity test), and end-pitch asymmetry across the facade " +
-        "(the two-faces/frontality falsification) — with hints. Classification itself stays " +
-        "the agent's Step 1 judgement; this grounds it in numbers in one call. If the " +
-        "evidence comes back empty, the margins are occluded — re-run with `crop`.",
+        "Numeric hints for Step 1: vertical-edge slopes (tilt/parallel verticals), per-band " +
+        "pitch drift (the linearity test), end-pitch asymmetry (the two-faces falsification), " +
+        "silhouette taper. HONEST LIMITS: the detector needs a sky-bounded silhouette, so it " +
+        "is strong on tall subjects against sky and weak on wide or occluded ones — on those " +
+        "it auto-retries with interior crops and says exactly what it tried, but classifying " +
+        "by eye (use view_crop to look closely) beats it there. Classification itself is " +
+        "always the agent's judgement; treat this as one witness, never the verdict.",
       inputSchema: {
         image: z.string().describe("Absolute path to the photograph (png/jpg)"),
         crop: CROP,
@@ -132,16 +138,24 @@ export function createServer(): McpServer {
       title: "Scaffold a reconstruction workspace",
       description:
         "Copies the viewer template into <dir>/viewer (if absent), writes compilable " +
-        "placeholder models/<id>.ts + scenes/<id>.ts stubs, and registers the subject in " +
-        "main.ts. Placeholder numbers are loudly marked: replace them with measured values " +
-        "before scoring — a converged score against invented targets is the false-100% trap.",
+        "placeholder models/<id>.ts + scenes/<id>.ts stubs, registers the subject in " +
+        "main.ts, copies the reference photograph into viewer/public/ (so the browser and " +
+        "the scoring gate can reach it), and scaffolds RECON.md — the working ledger. " +
+        "The workspace's dev server scores EVERY render saved via POST /__save-render " +
+        "automatically and returns the numbers in the save response. Placeholder numbers " +
+        "in the stubs are loudly marked: replace them with measured values before scoring " +
+        "— a converged score against invented targets is the false-100% trap.",
       inputSchema: {
         dir: z.string().describe("Absolute path of the workspace parent directory"),
         subject: z.string().describe("Subject id, e.g. 'flatiron' — letters/digits only"),
         referenceImage: z
           .string()
           .optional()
-          .describe("Public path or URL the viewer HUD should show for the reference"),
+          .describe(
+            "Absolute path to the reference photograph — it is copied into viewer/public/ " +
+            "and wired into the scene and the scoring gate. (A URL or public path is " +
+            "passed through as-is.)",
+          ),
       },
     },
     async ({ dir, subject, referenceImage }) => {
@@ -180,19 +194,92 @@ export function createServer(): McpServer {
   );
 
   server.registerTool(
+    "view_crop",
+    {
+      title: "Magnified crop with a coordinate grid — look closely, keep your bearings",
+      description:
+        "Writes a PNG of the crop, upscaled, with a labelled pixel grid burned in " +
+        "(magenta = x, cyan = y, labels in ORIGINAL image coordinates). Use it whenever " +
+        "you need to LOOK at a detail and read positions off what you see — junctions, " +
+        "eave lines, window corners. Every observed run hand-built exactly this " +
+        "(crop.py + PIL); this version needs no Python and no dependency check. Read the " +
+        "output image with your normal image reading.",
+      inputSchema: {
+        image: z.string().describe("Absolute path to the photograph (png/jpg)"),
+        crop: z.object({
+          x0: z.number(), y0: z.number(), x1: z.number(), y1: z.number(),
+        }).describe("Region to magnify, in ORIGINAL image pixels"),
+        out: z.string().describe("Absolute path for the output PNG"),
+        scale: z.number().optional().describe("Upscale factor (default: sized to ~1400 px output)"),
+        grid: z.number().optional().describe("Grid step in original pixels (default: a round step giving 8-20 lines)"),
+      },
+    },
+    async ({ image, crop, out, scale, grid }) => {
+      logHandshake("tools/call", { tool: "view_crop", image, crop, out });
+      const result = viewCrop(image, crop, out, { scale, grid });
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        structuredContent: result as unknown as Record<string, unknown>,
+      };
+    },
+  );
+
+  server.registerTool(
+    "trace_edge",
+    {
+      title: "Trace a boundary to sub-pixel numbers — eyes locate, the tool reads off",
+      description:
+        "Scans a crop along an axis and returns the first luma boundary as points in " +
+        "ORIGINAL image coordinates, with a robust Theil–Sen line fit and a ready " +
+        "segment_for_solve_camera. Use it to turn an edge you can SEE (ridge against sky, " +
+        "eave shadow line, wall corner) into exact endpoints instead of reading pixels by " +
+        "eye — hand-picked endpoints are ±3 px at best, and that is precisely what turns a " +
+        "solve_camera verdict 'weak'. direction is the scan direction: 'down' finds the " +
+        "top boundary (skyline), 'right' finds the left boundary, etc. A high " +
+        "residual_max_px means the boundary is not one straight edge — split the crop.",
+      inputSchema: {
+        image: z.string().describe("Absolute path to the photograph (png/jpg)"),
+        crop: z.object({
+          x0: z.number(), y0: z.number(), x1: z.number(), y1: z.number(),
+        }).describe("Region to scan, in ORIGINAL image pixels — tight around ONE edge"),
+        direction: z.enum(["down", "up", "left", "right"])
+          .describe("Scan direction: 'down' = first hit from the top per column (skyline), 'up' = from the bottom, 'left'/'right' = per row"),
+        threshold: z.number().optional()
+          .describe("Luma threshold (default: midpoint of the crop's 10th/90th percentile — usually right)"),
+        condition: z.enum(["below", "above"]).optional()
+          .describe("Hit when luma is below (dark subject on light sky — default) or above the threshold"),
+      },
+    },
+    async ({ image, crop, direction, threshold, condition }) => {
+      logHandshake("tools/call", { tool: "trace_edge", image, crop, direction });
+      const result = traceEdge(image, crop, direction, { threshold, condition });
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+        structuredContent: result as unknown as Record<string, unknown>,
+      };
+    },
+  );
+
+  server.registerTool(
     "solve_camera",
     {
-      title: "Solve the camera from picked lines",
+      title: "Solve the camera from picked lines — call it EARLY, iterate through it",
       description:
-        "Give it 4–10 line segments you have picked along real-world parallel families " +
-        "(vertical edges, eaves, sills, ridges) and it returns vanishing points with " +
-        "per-line residuals, the horizon, focal length, tilt/roll/yaw, eye height, and a " +
-        "ready-to-paste Three.js camera block including the setViewOffset arithmetic for " +
-        "an off-centre principal point. Picking the lines is yours; the algebra is not — " +
-        "hand-solving it is the single largest time sink in the method, and it is where " +
-        "sign slips live. Includes a leave-one-out check: a vanishing point is refitted " +
-        "WITHOUT each line and asked to predict it. Inconsistent input returns " +
-        "'inconsistent' plus the offending line, never a forced number.",
+        "Give it 4–10 line segments along real-world parallel families (vertical edges, " +
+        "eaves, sills, ridges) and it returns vanishing points with per-line residuals, the " +
+        "horizon, focal length, tilt/roll/yaw, eye height, and a ready-to-paste Three.js " +
+        "camera block including the setViewOffset arithmetic for an off-centre principal " +
+        "point. CALL IT EARLY WITH ROUGH LINES — do not polish lines first. A 'weak' " +
+        "verdict is normal on the first call and the result names the exact worst line to " +
+        "re-pick; iterating through the solver converges in 2–3 calls, while gathering " +
+        "'confident' lines before calling has been measured to cost a 30-minute manual " +
+        "algebra detour that the solver then confirmed in one call. The solver is the " +
+        "instrument for finding out which lines are good, not a finisher for lines already " +
+        "trusted. It is also the arbiter for structural hypotheses: label the lines per " +
+        "hypothesis and the residuals say which reading of the building is consistent. " +
+        "Inconsistent input returns 'inconsistent' plus the offending line, never a forced " +
+        "number. Verticals parallel in the image are handled as a shifted-lens/cropped " +
+        "frame (principal point on the horizon), not a tilt.",
       inputSchema: {
         image: z.string().describe("Absolute path to the photograph (png/jpg) — read for its size"),
         lines: z
@@ -279,7 +366,10 @@ export function createServer(): McpServer {
         "full score_render numbers. One call instead of the side-by-sides every run " +
         "hand-builds. Pass the photograph as imageA and the render as imageB; B is " +
         "resized to A. The pictures and the numbers come from the same detector, so a " +
-        "defect visible in edge_diff is the defect the score is counting.",
+        "defect visible in edge_diff is the defect the score is counting. CADENCE: run this " +
+        "(or read the auto-score every /__save-render returns) on EVERY iteration pass and " +
+        "log the numbers in RECON.md — a field run that scored once and then eyeballed " +
+        "drifted for an hour without converging. Fix the largest measured error first.",
       inputSchema: {
         imageA: z.string().describe("Absolute path to the base image — normally the reference photograph"),
         imageB: z.string().describe("Absolute path to the compared image — normally the render"),
@@ -304,7 +394,10 @@ export function createServer(): McpServer {
         "Scans render and reference photograph with the SAME silhouette detector and reports " +
         "edge error, area ratio, tip row, in-silhouette luma and sky gradient. Use the render " +
         "saved by the viewer's /__save-render endpoint (exact drawing-buffer size — never a " +
-        "screenshot, they rescale). Identity features are not covered: target them separately.",
+        "screenshot, they rescale). Note the endpoint already scores each save automatically " +
+        "and returns the silhouette numbers — this tool adds the luma/sky detail on top. " +
+        "Score EVERY pass, log it in RECON.md, fix the largest error first. Identity " +
+        "features are not covered: target them separately.",
       inputSchema: {
         render: z.string().describe("Absolute path to the render png"),
         reference: z.string().describe("Absolute path to the reference photograph"),
@@ -433,13 +526,24 @@ export function createServer(): McpServer {
             text:
               "Follow this method to rebuild the building in the photograph I provide as a " +
               "procedural, measured Three.js model. Use this server's tools for the " +
-              "deterministic steps instead of writing your own: `classify_reference` and " +
-              "`measure_reference` before measuring by hand (pass `crop` to aim them when " +
-              "foreground clutter defeats the margins), `solve_camera` instead of deriving " +
-              "vanishing points by hand, `measure_pitch` for any repeating rhythm, and " +
-              "`compare_images` + `score_render` for each scoring pass.\n\n" +
-              "When the reconstruction is done, build the workspace and call `open_viewer` " +
-              "so the result appears in the conversation.\n\n" +
+              "deterministic steps instead of writing your own scripts:\n" +
+              "- LOOK with `view_crop` (magnified, coordinate-gridded crops) and turn edges " +
+              "you can see into numbers with `trace_edge` — never read pixels by eye.\n" +
+              "- Call `solve_camera` EARLY with rough lines and iterate through its " +
+              "residuals; do not derive vanishing points by hand, and do not polish lines " +
+              "before the first call — 'weak' plus a named worst line IS the workflow.\n" +
+              "- `measure_pitch` for any repeating rhythm; `classify_reference`/" +
+              "`measure_reference` as extra witnesses where a sky-bounded silhouette exists.\n" +
+              "- `init_workspace` for the workspace. It scaffolds RECON.md — the working " +
+              "ledger. Rewrite it every step: verified facts with evidence, assumptions, " +
+              "REFUTED hypotheses (once buried, they stay dead), and the score history.\n" +
+              "- Every render saved via POST /__save-render is scored automatically and the " +
+              "numbers come back in the save response. Read them EVERY pass, log them in " +
+              "RECON.md, fix the largest error first. Never iterate by eyeballing " +
+              "screenshots.\n\n" +
+              "When the targets converge, build the workspace (`npm run build`) and call " +
+              "`open_viewer` so the result appears in the conversation — the run is not " +
+              "done until the viewer is delivered.\n\n" +
               skillText(),
           },
         },

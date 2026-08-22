@@ -22,12 +22,16 @@ app.appendChild(renderer.domElement);
 
 const pmrem = new THREE.PMREMGenerator(renderer);
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(30, innerWidth / innerHeight, 1, 12000);
+const camera = new THREE.PerspectiveCamera(30, innerWidth / innerHeight, 0.05, 12000);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.06;
 controls.maxDistance = 6000;
-controls.minDistance = 30;
+// minDistance must stay far below any solved camera distance. It was 30 —
+// sized for tower subjects — and on a house solved at ~15 m OrbitControls
+// silently shoved the camera back to 30, exactly 2x, which cost a field run
+// a debugging cycle that pattern-matched to "wrong focal length".
+controls.minDistance = 0.5;
 
 // ---------------------------------------------------------------- scene state
 let active: BuildingModel = MODELS[0];

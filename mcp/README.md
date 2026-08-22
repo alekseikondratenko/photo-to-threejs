@@ -6,13 +6,15 @@ host agent — an MCP server cannot perform the reconstruction (the White House 
 
 | Tool | What it does |
 |---|---|
-| `classify_reference` | Evidence for Step 1: vertical-edge slopes, per-band pitch drift (the linearity test), end-pitch asymmetry (the two-faces falsification), silhouette taper. Hints, never a verdict |
-| `measure_reference` | Pixel measurement of a photograph: per-row-sky silhouette (gradient-proof in both axes), floor-pitch autocorrelation per height band, lit/shadow bands |
-| `solve_camera` | Vanishing points from lines **you** pick, with per-line residuals and a leave-one-out check; horizon, focal length, tilt/roll/yaw, eye height, metric distance, and a paste-ready Three.js camera block including `setViewOffset` |
+| `view_crop` | Magnified crop with a labelled pixel grid burned in — look closely and read positions in ORIGINAL image coordinates. Every field run hand-built this (crop.py); now it needs no Python |
+| `trace_edge` | An edge you can see → exact numbers: per-column/row boundary points, Theil–Sen line fit with residuals, and a segment ready for `solve_camera` |
+| `solve_camera` | Vanishing points from lines **you** pick, with per-line residuals and a leave-one-out check; horizon, focal length, tilt/roll/yaw, eye height, metric distance, and a paste-ready Three.js camera block including `setViewOffset`. **Call it early and iterate through the residuals** — 'weak' + a named worst line is the workflow, not a failure. Parallel verticals are treated as a shifted lens (principal point on the horizon), never a spurious tilt |
+| `classify_reference` | Evidence for Step 1: vertical-edge slopes, per-band pitch drift, end-pitch asymmetry, silhouette taper. Hints, never a verdict. Auto-retries with interior crops when the full-frame scan is blind, and says exactly what it tried |
+| `measure_reference` | Pixel measurement of a photograph: per-row-sky silhouette, floor-pitch autocorrelation per height band, lit/shadow bands |
 | `measure_pitch` | The same autocorrelation, aimed at a crop and an axis: floor and course spacing, baluster and bay rhythm, per-face end-pitch |
 | `compare_images` | Writes `overlay.png` / `wipe.png` / `edge_diff.png` and returns the full `score_render` numbers — the evidence pack every run used to hand-build |
-| `score_render` | Scans render and reference with the **same** detector: silhouette edge error (with per-band breakdown), area ratio, tip row, in-silhouette luma, sky gradient |
-| `init_workspace` | Scaffolds `<dir>/viewer` with compilable model/scene stubs, placeholders loudly marked |
+| `score_render` | Scans render and reference with the **same** detector: row-wise silhouette AND column-wise skyline (the transpose — the primary signal on wide subjects), luma, sky gradient |
+| `init_workspace` | Scaffolds `<dir>/viewer` + `RECON.md` (the working ledger), copies the reference into `public/`, and wires the **auto-scoring gate**: the dev server scores every render saved via `POST /__save-render` and returns the numbers in the save response — saving and being graded are one action |
 | `open_viewer` | Serves a built viewer directory and shows it in an MCP App panel where the host supports one; always returns a localhost URL for a real browser |
 
 Every scanning tool takes an optional `crop` (original-image pixels) and reports

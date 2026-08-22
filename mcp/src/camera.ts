@@ -286,6 +286,25 @@ export function solveCamera(
 
   const h0 = horizontals[0], h1 = horizontals[1];
 
+  // Shifted-lens / cropped-frame branch. When the supplied verticals are
+  // parallel in the image (vertical VP at infinity), the camera has NO tilt —
+  // and then the horizon row IS the principal point's row. If that row is far
+  // from the frame centre, the image is a crop or a shift-lens shot, and
+  // assuming a centred principal point would convert the offset into a
+  // spurious tilt (about 9 degrees on the field case that exposed this: a
+  // 2000x890 hero crop of a 2000x1240 render — verticals parallel, horizon at
+  // y=618, frame centre at 445; the agent derived the correct treatment by
+  // hand while this tool would have got it wrong).
+  if (verticalFam && !verticalFam.finite && h0?.point && h1?.point) {
+    const hy = horizonY(W / 2);
+    if (hy !== null && Math.abs(hy - H / 2) > H * 0.04) {
+      pp = [W / 2, hy];
+      ppSource =
+        "horizon row (verticals are parallel ⇒ no tilt ⇒ the principal point sits on the " +
+        "horizon — a cropped frame or shifted lens; reproduce with setViewOffset, never a tilt)";
+    }
+  }
+
   if (known?.principal_point === "solve" && h0?.point && h1?.point && verticalFam?.point) {
     // Three finite vanishing points pin the principal point: it is the
     // orthocentre of their triangle. This is the only case where the

@@ -1,0 +1,217 @@
+/**
+ * Render-vs-reference scorer for the save-render gate.
+ *
+ * This runs INSIDE the workspace dev server (node context, via vite.config)
+ * every time a render is saved. It is a trimmed port of the canonical scorer
+ * in the photo-to-threejs MCP server (mcp/src/scan.ts) — same detector for
+ * both images, same numbers, so scores from the gate and from `score_render`
+ * agree. If you change one, change the other.
+ *
+ * Why it lives here at all: the whole point of the gate is that saving a
+ * render and being graded are ONE action. A rule that lives in instructions
+ * can be forgotten; a rule that lives in the endpoint cannot. (Pattern
+ * borrowed with respect from arc-skill's predict-before-act gate.)
+ */
+import fs from 'node:fs';
+import jpeg from 'jpeg-js';
+import { PNG } from 'pngjs';
+
+export function decodeImage(p) {
+  const buf = fs.readFileSync(p);
+  const lower = p.toLowerCase();
+  if (lower.endsWith('.png')) {
+    const png = PNG.sync.read(buf);
+    return { w: png.width, h: png.height, data: new Uint8Array(png.data) };
+  }
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) {
+    const img = jpeg.decode(buf, { useTArray: true, maxMemoryUsageInMB: 1024 });
+    return { w: img.width, h: img.height, data: new Uint8Array(img.data) };
+  }
+  throw new Error(`Unsupported image type: ${p} (png/jpg only)`);
+}
+
+function resize(src, w, h) {
+  if (src.w === w && src.h === h) return src;
+  const out = new Uint8Array(w * h * 4);
+  for (let y = 0; y < h; y++) {
+    const sy = (y * (src.h - 1)) / (h - 1);
+    const y0 = Math.floor(sy), y1 = Math.min(src.h - 1, y0 + 1), fy = sy - y0;
+    for (let x = 0; x < w; x++) {
+      const sx = (x * (src.w - 1)) / (w - 1);
+      const x0 = Math.floor(sx), x1 = Math.min(src.w - 1, x0 + 1), fx = sx - x0;
+      for (let c = 0; c < 4; c++) {
+        const a = src.data[(y0 * src.w + x0) * 4 + c];
+        const b = src.data[(y0 * src.w + x1) * 4 + c];
+        const d = src.data[(y1 * src.w + x0) * 4 + c];
+        const e = src.data[(y1 * src.w + x1) * 4 + c];
+        out[(y * w + x) * 4 + c] = (a * (1 - fx) + b * fx) * (1 - fy) + (d * (1 - fx) + e * fx) * fy;
+      }
+    }
+  }
+  return { w, h, data: out };
+}
+
+const px = (im, x, y) => {
+  const i = (y * im.w + x) * 4;
+  return [im.data[i], im.data[i + 1], im.data[i + 2]];
+};
+const luma = (r, g, b) => 0.2126 * r + 0.7152 * g + 0.0722 * b;
+
+function median(xs) {
+  if (!xs.length) return 0;
+  const s = [...xs].sort((a, b) => a - b);
+  const n = s.length;
+  return n % 2 ? s[n >> 1] : 0.5 * (s[(n >> 1) - 1] + s[n >> 1]);
+}
+
+function rowSkyLR(im, y) {
+  const side = (x0, x1) => {
+    const ch = [[], [], []];
+    for (let x = x0; x < x1; x++) {
+      const p = px(im, x, y);
+      ch[0].push(p[0]); ch[1].push(p[1]); ch[2].push(p[2]);
+    }
+    return [median(ch[0]), median(ch[1]), median(ch[2])];
+  };
+  return { l: side(2, Math.min(14, im.w)), r: side(Math.max(0, im.w - 14), im.w - 2) };
+}
+
+function skyAtX(sky, x, w) {
+  const t = x / (w - 1);
+  return [
+    sky.l[0] + (sky.r[0] - sky.l[0]) * t,
+    sky.l[1] + (sky.r[1] - sky.l[1]) * t,
+    sky.l[2] + (sky.r[2] - sky.l[2]) * t,
+  ];
+}
+
+function silhouette(im, tol = 42) {
+  const rows = [];
+  for (let y = 0; y < im.h; y++) {
+    const sky = rowSkyLR(im, y);
+    const isSubject = (x) => {
+      const p = px(im, x, y);
+      const s = skyAtX(sky, x, im.w);
+      return Math.hypot(p[0] - s[0], p[1] - s[1], p[2] - s[2]) > tol;
+    };
+    let left = -1, right = -1;
+    for (let x = 0; x < im.w; x++) if (isSubject(x)) { left = x; break; }
+    if (left >= 0) for (let x = im.w - 1; x >= left; x--) if (isSubject(x)) { right = x; break; }
+    rows.push({ left, right, width: left >= 0 && right >= 0 ? right - left + 1 : 0 });
+  }
+  return rows;
+}
+
+function boundedRows(sil, w) {
+  const m = Math.max(1, Math.round(w * 0.03));
+  const out = [];
+  for (let y = 0; y < sil.length; y++) {
+    const r = sil[y];
+    if (r.width > w * 0.05 && r.left > m && r.right < w - 1 - m) out.push(y);
+  }
+  return out;
+}
+
+/**
+ * Per-column skyline: first row from the top where the pixel breaks from that
+ * column's own top-margin sky. This is the TRANSPOSE of the row-wise
+ * silhouette, and it exists because subjects wider than tall (houses) are
+ * sky-bounded in almost no rows — the row-wise scorer came back empty on the
+ * exact photograph this gate was built for, while a column-wise scan of the
+ * same image yields hundreds of comparable columns. (The field agent
+ * discovered this first, as silh.py.)
+ */
+function skyline(im, tol = 42) {
+  const out = new Array(im.w).fill(-1);
+  const yMax = Math.min(14, im.h);
+  for (let x = 0; x < im.w; x++) {
+    const ch = [[], [], []];
+    for (let y = 2; y < yMax; y++) {
+      const p = px(im, x, y);
+      ch[0].push(p[0]); ch[1].push(p[1]); ch[2].push(p[2]);
+    }
+    const sky = [median(ch[0]), median(ch[1]), median(ch[2])];
+    let run = 0;
+    for (let y = 2; y < im.h; y++) {
+      const p = px(im, x, y);
+      const d = Math.hypot(p[0] - sky[0], p[1] - sky[1], p[2] - sky[2]);
+      run = d > tol ? run + 1 : 0;
+      if (run >= 4) { out[x] = y - 3; break; }
+    }
+  }
+  return out;
+}
+
+function skylineScore(ref, ren) {
+  const a = skyline(ref), b = skyline(ren);
+  const errs = [];
+  const cols = [];
+  for (let x = Math.round(ref.w * 0.03); x < ref.w * 0.97; x++) {
+    if (a[x] >= 0 && b[x] >= 0) { errs.push(Math.abs(a[x] - b[x])); cols.push(x); }
+  }
+  if (!errs.length) return null;
+  const mean = (v) => (v.length ? Math.round((v.reduce((s, e) => s + e, 0) / v.length) * 10) / 10 : null);
+  const third = Math.floor(errs.length / 3);
+  return {
+    mean_top_error_px: mean(errs),
+    top_error_by_band: {
+      left: mean(errs.slice(0, third)),
+      middle: mean(errs.slice(third, 2 * third)),
+      right: mean(errs.slice(2 * third)),
+    },
+    max_top_error_px: Math.max(...errs),
+    columns_compared: errs.length,
+  };
+}
+
+/** Score a render against a reference — same shape as score_render's silhouette block. */
+export function scoreImages(renderPath, refPath) {
+  const ref = decodeImage(refPath);
+  const ren = resize(decodeImage(renderPath), ref.w, ref.h);
+  const sRef = silhouette(ref);
+  const sRen = silhouette(ren);
+
+  const bRef = new Set(boundedRows(sRef, ref.w));
+  const bRen = new Set(boundedRows(sRen, ren.w));
+  const bothAll = [...bRef].filter((y) => bRen.has(y)).sort((a, b) => a - b);
+
+  const runs = [];
+  for (const y of bothAll) {
+    const cur = runs[runs.length - 1];
+    if (cur && y - cur[cur.length - 1] <= 3) cur.push(y);
+    else runs.push([y]);
+  }
+  const both = runs.reduce((a, b) => (b.length > a.length ? b : a), []);
+
+  let edgeErr = 0, edgeMax = 0, n = 0;
+  const perRow = [];
+  for (const y of both) {
+    const e = (Math.abs(sRef[y].left - sRen[y].left) + Math.abs(sRef[y].right - sRen[y].right)) / 2;
+    edgeErr += e; edgeMax = Math.max(edgeMax, e); n++;
+    perRow.push(e);
+  }
+  const bandMean = (a) => (a.length ? Math.round((a.reduce((s, v) => s + v, 0) / a.length) * 10) / 10 : null);
+  const third = Math.floor(perRow.length / 3);
+  const area = (s) => both.reduce((sum, y) => sum + s[y].width, 0);
+
+  const rowWise = {
+    mean_edge_error_px: n ? Math.round((edgeErr / n) * 10) / 10 : null,
+    edge_error_by_band: {
+      top: bandMean(perRow.slice(0, third)),
+      middle: bandMean(perRow.slice(third, 2 * third)),
+      bottom: bandMean(perRow.slice(2 * third)),
+    },
+    max_edge_error_px: edgeMax,
+    rows_compared: n,
+    area_ratio: Math.round((area(sRen) / Math.max(1, area(sRef))) * 1000) / 1000,
+  };
+
+  return {
+    ...rowWise,
+    // The transpose measurement — the primary signal on wide/occluded
+    // subjects where rows_compared is small. Trust whichever axis compared
+    // more of the subject.
+    skyline: skylineScore(ref, ren),
+    unreliable_row_scan: n < 30 || null,
+  };
+}
