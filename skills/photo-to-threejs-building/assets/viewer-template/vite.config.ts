@@ -38,8 +38,9 @@ function saveRender(): Plugin {
         req.on('end', () => {
           void (async () => {
             try {
-              const { name, dataUrl, reference } = JSON.parse(body) as {
+              const { name, dataUrl, reference, span } = JSON.parse(body) as {
                 name?: string; dataUrl: string; reference?: string;
+                span?: { x0: number; x1: number };
               };
               const root = server.config.root;
               const safe = path.basename(String(name ?? 'render.png'));
@@ -60,15 +61,42 @@ function saveRender(): Plugin {
                     'An unscored render proves nothing.',
                 };
               } else {
-                const { scoreImages } = await import('./scripts/score.mjs');
-                const silhouette = scoreImages(renderPath, refPath);
-                payload = { saved: `renders/${safe}`, scored: true, reference: path.relative(root, refPath), silhouette };
-                fs.writeFileSync(`${renderPath}.score.json`, JSON.stringify(payload, null, 2));
-                // Into the server log too — visible to anyone tailing the dev server.
-                server.config.logger.info(
-                  `[score] ${safe} vs ${path.basename(refPath)}: mean_edge ${silhouette.mean_edge_error_px} px, ` +
-                  `area ${silhouette.area_ratio}, bands ${JSON.stringify(silhouette.edge_error_by_band)}`,
-                );
+                const { scoreImages, decodeImage, isDegenerate } = await import('./scripts/score.mjs');
+                // A uniform frame is a page error or a canvas read before a
+                // paint (bug checklist #9). Three appeared across two field
+                // runs, each scored as a mute null the agent had to diagnose
+                // from nothing. Say it outright instead of scoring noise.
+                if (isDegenerate(decodeImage(renderPath))) {
+                  payload = {
+                    saved: `renders/${safe}`,
+                    scored: false,
+                    warning:
+                      'RENDER IS UNIFORM (blank/black) — nothing was scored. The page is ' +
+                      'erroring, or the canvas was read before a frame painted (bug ' +
+                      'checklist #9: needs preserveDrawingBuffer and a painted frame). ' +
+                      'Check the browser console, fix, then re-save.',
+                  };
+                } else {
+                  const silhouette = scoreImages(renderPath, refPath, span);
+                  const prev = lastScores.get(safe.replace(/\d+/g, '#'));
+                  const delta = prev ? deltaOf(prev, silhouette) : null;
+                  lastScores.set(safe.replace(/\d+/g, '#'), silhouette);
+                  payload = {
+                    saved: `renders/${safe}`,
+                    scored: true,
+                    reference: path.relative(root, refPath),
+                    silhouette,
+                    ...(delta ? { delta_vs_previous: delta } : {}),
+                  };
+                  fs.writeFileSync(`${renderPath}.score.json`, JSON.stringify(payload, null, 2));
+                  appendReconRow(root, safe, silhouette);
+                  const sk = silhouette.skyline;
+                  server.config.logger.info(
+                    `[score] ${safe}: skyline ${sk ? sk.mean_top_error_px : 'n/a'} px, ` +
+                    `row-edge ${silhouette.mean_edge_error_px} px, area ${silhouette.area_ratio}` +
+                    (delta ? ` | Δ ${JSON.stringify(delta)}` : ''),
+                  );
+                }
               }
               res.setHeader('content-type', 'application/json');
               res.end(JSON.stringify(payload));
@@ -81,6 +109,62 @@ function saveRender(): Plugin {
       });
     },
   };
+}
+
+/** Previous score per render-name shape ("pass3.png" -> "pass#.png"), for deltas. */
+const lastScores = new Map<string, Record<string, unknown>>();
+
+/** What moved since the previous pass — so nobody re-opens old score files. */
+function deltaOf(prev: any, now: any): Record<string, number> | null {
+  const out: Record<string, number> = {};
+  const pick = (o: any) => ({
+    skyline_mean: o?.skyline?.mean_top_error_px,
+    skyline_middle: o?.skyline?.top_error_by_band?.middle,
+    row_edge_mean: o?.mean_edge_error_px,
+    lit_shadow_ratio: o?.luma?.bands?.render?.lit_over_shadow_ratio,
+  });
+  const a = pick(prev), b = pick(now);
+  for (const k of Object.keys(a) as (keyof typeof a)[]) {
+    if (typeof a[k] === 'number' && typeof b[k] === 'number') {
+      out[k] = Math.round(((b[k] as number) - (a[k] as number)) * 100) / 100;
+    }
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+/**
+ * Append the pass to RECON.md's Score history. Both field runs left that table
+ * empty — the .score.json files made manual logging feel redundant, and the
+ * ledger lost its trend. The row lands automatically; the agent still writes
+ * the "what changed" column.
+ */
+function appendReconRow(root: string, name: string, s: any) {
+  try {
+    const recon = path.resolve(root, '..', 'RECON.md');
+    if (!fs.existsSync(recon)) return;
+    const txt = fs.readFileSync(recon, 'utf-8');
+    if (!txt.includes('## Score history')) return;
+    const sk = s?.skyline;
+    const row =
+      `| ${name} | ${sk ? sk.mean_top_error_px : '—'} | ${sk?.top_error_by_band?.middle ?? '—'} | ` +
+      `${s?.mean_edge_error_px ?? '—'} | ${s?.area_ratio ?? '—'} | _(what changed?)_ |`;
+    // Insert INTO the table (after its header separator or the last existing
+    // row), not at the end of the file — a score history that lands under the
+    // footer is not a table anyone reads.
+    const lines = txt.split('\n');
+    const head = lines.findIndex((l) => l.trim().startsWith('## Score history'));
+    if (head < 0) return;
+    let at = head;
+    for (let i = head + 1; i < lines.length; i++) {
+      if (lines[i].trim().startsWith('|')) at = i;
+      else if (lines[i].trim().startsWith('#')) break;
+    }
+    if (at === head) return; // no table skeleton; leave the ledger alone
+    lines.splice(at + 1, 0, row);
+    fs.writeFileSync(recon, lines.join('\n'));
+  } catch {
+    /* the ledger is the agent's; never fail a save over it */
+  }
 }
 
 function findReference(root: string, explicit?: string): string | null {
@@ -99,4 +183,48 @@ function findReference(root: string, explicit?: string): string | null {
     : null;
 }
 
-export default defineConfig({ plugins: [saveRender()] });
+/**
+ * POST /__render {view, name, context?, span?}  → queue a render
+ * GET  /__render-queue                          → the page picks the job up
+ *
+ * The page polls the queue once a second (dev only) and posts the result to
+ * /__save-render itself, so an agent's scoring pass is one curl instead of a
+ * browser-driving sequence. Twenty-one passes in one field run each paid that
+ * overhead.
+ */
+function renderTrigger(): Plugin {
+  let queued: unknown = null;
+  return {
+    name: 'render-trigger',
+    configureServer(server) {
+      server.middlewares.use('/__render-queue', (_req, res) => {
+        res.setHeader('content-type', 'application/json');
+        res.end(JSON.stringify(queued));
+        queued = null; // one-shot: the page has it now
+      });
+      server.middlewares.use('/__render', (req, res) => {
+        if (req.method !== 'POST') { res.statusCode = 405; res.end('POST only'); return; }
+        let body = '';
+        req.on('data', (c) => { body += c; });
+        req.on('end', () => {
+          try {
+            const job = JSON.parse(body) as { name?: string };
+            if (!job.name) throw new Error('name is required');
+            queued = job;
+            res.setHeader('content-type', 'application/json');
+            res.end(JSON.stringify({
+              queued: job,
+              note: 'The page renders and saves within ~1-2 s; read renders/<name>.score.json ' +
+                    'or watch the dev-server log for the [score] line.',
+            }));
+          } catch (e) {
+            res.statusCode = 400;
+            res.end(String(e));
+          }
+        });
+      });
+    },
+  };
+}
+
+export default defineConfig({ plugins: [saveRender(), renderTrigger()] });

@@ -35,11 +35,19 @@ The whole method is one loop, and each pass has the same grammar:
 2. **Act** — make the change; save a render via `POST /__save-render`.
 3. **Read the grade** — the save response carries the score (the endpoint scores every
    save automatically; there is no unscored render). Log it in Score history.
-4. **Fix the largest measured error next.** One eye pass per numeric pass.
+4. **Fix the largest measured error — and every independent smaller fix — in the SAME
+   pass.** Passes are expensive (3–5 minutes each: edit, render, score, look); edits are
+   cheap. A gutter colour, a tree position and a window reveal do not interact, so they
+   do not each deserve their own pass. One field run spent 21 passes fixing roughly one
+   thing at a time.
+5. **One eye pass per numeric pass.**
 
-Stop when the targets hold and the eye pass finds nothing the metrics missed. Never
-iterate on eyeballed screenshots — an observed run scored once, eyeballed for an hour,
-and did not converge.
+**Stop rules — converged is a number, not a feeling.** A metric that has improved by
+less than **0.5% of the image diagonal** over the last two passes is converged: stop
+optimising it and move to the next phase. Soft budget: **~12 scored passes** for a
+building-scale subject; going beyond is allowed but write one line in RECON.md saying
+what is still moving and why. Never iterate on eyeballed screenshots — an observed run
+scored once, eyeballed for an hour, and did not converge.
 
 There is no reconstruction algorithm here and no ML. The 3D comes from you writing
 TypeScript that composes primitives and swept paths. What makes it reliable is not
@@ -168,11 +176,15 @@ Three worked camera solves, as recipes (numbers in `references/casebook.md`):
 ## If the photo-to-threejs MCP server is available — the instruments
 
 When this skill arrives alongside the MCP server (the plugin ships both), the
-deterministic steps are tool calls, not scripts you write:
+deterministic steps are tool calls, not scripts you write. **If your host defers tool
+schemas, load them ALL in one search first** (`select:` with every photo-to-threejs tool
+name) — otherwise each first use costs a round-trip and writing Python starts to look
+cheaper than calling the tool, which is how a run ends up rebuilding the toolset:
 
 | Need | Tool | The rule that matters |
 |---|---|---|
-| Look closely, keep coordinates | `view_crop` | magnified crop with a labelled pixel grid — read positions off the zoom |
+| Look closely, keep coordinates | `view_crop` | magnified crop with a labelled pixel grid — read positions off the zoom. Pass an ARRAY of up to 6 regions for a contact sheet: one call instead of six |
+| Feature positions, after the camera | `unproject` | image points + a plane → world coordinates. **Use this instead of measuring features**; it is the single biggest time saving in the method |
 | An edge as numbers | `trace_edge` | eyes locate the edge, the tool reads it off; feeds `solve_camera` directly |
 | The camera | `solve_camera` | **call it EARLY with rough lines** — 'weak' + a named worst line IS the workflow; iterate through the residuals, 2–3 calls. Never derive vanishing points by hand, and never "collect confident lines first" (measured cost of that strategy: a 30-minute detour the solver then confirmed in one call) |
 | Any repeating rhythm | `measure_pitch` | aimable autocorrelation, warns at the noise floor |
@@ -193,16 +205,11 @@ autocorrelation and lit/shadow bands deterministically:
 python3 scripts/measure_reference.py ref.jpg          # needs Pillow
 ```
 
-For anything it does not cover (bay pitch on one facade strip, colour patches at
-specific coordinates, magnified crops near the noise floor), scan directly — any
-decoder works; the point is that every number comes from a scan, not an eyeball:
-
-```python
-from PIL import Image
-im = Image.open('ref.png').convert('RGB')
-w, h = im.size
-px = im.load()          # px[x, y] -> (r, g, b)
-```
+For anything it does not cover, use the server's instruments — `view_crop` to look,
+`trace_edge` to turn an edge into numbers, `measure_pitch` for a rhythm. Only if this
+skill arrived WITHOUT the MCP server (no photo-to-threejs tools in your toolset) fall
+back to scanning by hand; the appendix at the end of this file has the snippet. Either
+way the rule is the same: every number comes from a scan, not an eyeball.
 
 Get, at minimum:
 - **Floor pitch** — autocorrelate a vertical luminance profile down one face. This gives
@@ -264,6 +271,20 @@ building** — the linear solve that put ground level above Taipei's module stac
 method failing loudly, and the correct response was to change method, not to bend the
 building until the contradiction hid.
 
+## Step 2.9 — the measurement boundary
+
+**Do not measure windows, doors or trim before the first scored massing.** The massing
+gate needs only footprint, eave, ridge and the big wings; everything else waits.
+
+This is a deferral, not a skip, and it makes the details SAFER rather than riskier: a
+feature measured before the frame is verified is measured against an unverified camera
+and an unverified scale, and goes stale the moment either moves. One run measured its
+windows early, then corrected its storey count (2-storey → 1.5-storey), and every
+pre-measured position had to be redone. After the massing scores, the overlay tells you
+which details are actually wrong, and — with the camera solved — `unproject` turns
+image points into world coordinates directly, which is faster than pixel-measuring
+each feature was in the first place.
+
 ## Step 3 gate — massing before detail, always
 
 Block out the ENTIRE building as plain massing first — every visible face, the roof
@@ -276,6 +297,11 @@ Scope rule, from every worked subject: **context is massing only** — ground pl
 neighbour blocks, low-poly trees. Lawns, hedges and planting are not the subject; if the
 photograph makes a context element load-bearing (an occluder, a scale anchor), massing
 still suffices to stage it.
+
+**Context budget: ~2 passes, total.** The subject is what converges; flank bands of the
+score are advisory, because on a real photograph they measure vegetation as often as
+building. A field run spent a large share of its late passes hand-staging a garden that
+no metric was ever going to reward.
 
 ## Step 3 — Build, with detail as GEOMETRY not texture
 
@@ -509,6 +535,35 @@ a camera are spent here. Worked techniques, mined from a run that did this super
     profile, fit a smooth function through them; for a stepped one, model the steps.
     The photograph, not the fitting convenience, decides which.
 
+## Delivery gate — two checks nothing else performs
+
+Every metric in this method compares the render to the photograph from ONE viewpoint.
+Two failure classes survive that, and both have shipped:
+
+1. **The model intersecting itself.** Run `window.__clearance()` in the viewer. It
+   reports openings (window/door meshes) that pass through roof planes — the defect a
+   field run delivered with wing windows driven through the main roof: invisible in the
+   reference view, obvious from 3/4. **Any penetration blocks delivery.** If it reports
+   zero openings or zero roofs matched, your meshes are unnamed — name them and re-run
+   rather than reading that as a pass.
+
+2. **Everything the metrics do not measure.** Save the 3/4, side, rear and top views,
+   then get FRESH EYES on them. If the Agent tool is available, spawn a sub-agent given
+   ONLY those renders plus the photograph and prompted adversarially — *"find visual
+   defects: floating geometry, interpenetration, missing faces, wrong proportions"* —
+   because the builder is demonstrably blind to its own model (the run above inspected
+   that very region of its own render and saw nothing). Without an Agent tool, do the
+   same review yourself on fresh `view_crop`s of the view renders, which at least
+   changes what you are looking at.
+
+Sub-agents are for this check and NOT for measurement or refinement: measuring is
+hypothesis-forming (a parallel measurer returns numbers without the mental model that
+makes them meaningful), passes are inherently serial, and two agents editing one model
+file is a merge conflict rather than a speed-up.
+
+Then build (`npm run build`) and call `open_viewer` on the dist directory — the run is
+not finished until the viewer is delivered.
+
 ## Honesty requirements
 
 State these every time, in the file header and to the user:
@@ -518,3 +573,18 @@ State these every time, in the file header and to the user:
   projected width is pinned.
 - Report the measured match as numbers, not adjectives.
 - This is a massing/visualisation model: no survey accuracy, no BIM, no IFC.
+
+## Appendix — scanning by hand (no MCP server)
+
+Only when the photo-to-threejs tools are absent. Any decoder works:
+
+```python
+from PIL import Image
+im = Image.open('ref.png').convert('RGB')
+w, h = im.size
+px = im.load()          # px[x, y] -> (r, g, b)
+```
+
+Column-wise skyline (wide subjects), row-wise edges (tall ones), autocorrelation for
+rhythms. This is what the instruments do; doing it by hand costs about 20 minutes per
+run and produces the same numbers with more variance.

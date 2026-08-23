@@ -62372,6 +62372,28 @@ function autoLabel(s) {
   if (Math.abs(dy) > Math.abs(dx) / Math.tan(25 * Math.PI / 180)) return "vertical";
   return dy / (dx || 1e-9) < 0 ? "horizontal-a" : "horizontal-b";
 }
+function groupFamilies(segments) {
+  const given = segments.filter((s) => s.label && s.label.trim().length);
+  if (given.length === segments.length) {
+    const counts = /* @__PURE__ */ new Map();
+    for (const s of segments) counts.set(s.label, (counts.get(s.label) ?? 0) + 1);
+    const singles = [...counts.values()].filter((n) => n === 1).length;
+    if (singles <= counts.size / 2) {
+      return { labelled: segments.map((s) => ({ ...s, label: s.label })), grouping: "as-given" };
+    }
+    const prefixOf = (l) => l.split(/[-_.]/)[0] || l;
+    const pc = /* @__PURE__ */ new Map();
+    for (const s of segments) pc.set(prefixOf(s.label), (pc.get(prefixOf(s.label)) ?? 0) + 1);
+    const prefixSingles = [...pc.values()].filter((n) => n === 1).length;
+    if (pc.size >= 2 && prefixSingles <= pc.size / 2) {
+      return {
+        labelled: segments.map((s) => ({ ...s, label: prefixOf(s.label) })),
+        grouping: "prefix"
+      };
+    }
+  }
+  return { labelled: segments.map((s) => ({ ...s, label: s.label ?? autoLabel(s) })), grouping: "direction" };
+}
 function solveCamera(size, segments, known) {
   const [W, H2] = size;
   const diag = Math.hypot(W, H2);
@@ -62381,10 +62403,14 @@ function solveCamera(size, segments, known) {
       `solve_camera needs at least 4 line segments (got ${segments.length}) \u2014 two per family for two families, or it cannot fit anything to check.`
     );
   }
-  const labelled = segments.map((s) => ({ ...s, label: s.label ?? autoLabel(s) }));
-  if (segments.some((s) => !s.label)) {
+  const { labelled, grouping } = groupFamilies(segments);
+  if (grouping === "prefix") {
     warnings.push(
-      "some lines had no label, so families were guessed from direction (near-vertical \u2192 'vertical', others split by slope sign). Check the grouping below before trusting the pose; supply labels to control it."
+      "labels looked per-line, so families were grouped by their common PREFIX (text before the first '-', '_' or '.'). Check the families below \u2014 if the grouping is wrong, re-send with one shared label per family."
+    );
+  } else if (grouping === "direction") {
+    warnings.push(
+      "labels were missing or all distinct, so families were guessed from direction (near-vertical \u2192 'vertical', others split by slope sign). Check the grouping below before trusting the pose; supply one shared label per family to control it."
     );
   }
   const byLabel = /* @__PURE__ */ new Map();
@@ -62434,7 +62460,9 @@ function solveCamera(size, segments, known) {
   const verticalFam = families.find((f2) => f2.vertical);
   const horizontals = families.filter((f2) => !f2.vertical);
   if (horizontals.length < 1) {
-    throw new Error("no horizontal family found \u2014 label at least one family of eave/sill/ridge lines");
+    throw new Error(
+      'no horizontal family found \u2014 label lines by FAMILY, not per line: three eave lines all labelled "eave" (or "eave-a"/"eave-b" for two facades), not "eave-left"/"eave-mid"/"eave-right". Lines parallel in the WORLD share a label.'
+    );
   }
   let horizon = null;
   if (horizontals.length >= 2) {
@@ -62449,7 +62477,16 @@ function solveCamera(size, segments, known) {
   let focal = null;
   let inconsistent = null;
   const h0 = horizontals[0], h1 = horizontals[1];
-  if (verticalFam && !verticalFam.finite && h0?.point && h1?.point) {
+  const verticallyParallel = (() => {
+    if (!verticalFam) return false;
+    if (!verticalFam.finite) return true;
+    const p2 = verticalFam.point;
+    if (!p2) return true;
+    if (Math.hypot(p2[0] - W / 2, p2[1] - H2 / 2) > 8 * diag) return true;
+    const guessF = Math.max(W, H2);
+    return Math.abs(deg(Math.atan2(guessF, Math.abs(p2[1] - H2 / 2)))) > 88.5;
+  })();
+  if (verticalFam && verticallyParallel && h0?.point && h1?.point) {
     const hy = horizonY(W / 2);
     if (hy !== null && Math.abs(hy - H2 / 2) > H2 * 0.04) {
       pp = [W / 2, hy];
@@ -62645,6 +62682,8 @@ function solveCamera(size, segments, known) {
       y_at_centre: horizonY(W / 2) === null ? null : r2(horizonY(W / 2)),
       y_at_xmax: horizonY(W) === null ? null : r2(horizonY(W))
     } : null,
+    /** Everything `unproject` needs, ready to pass straight back in. */
+    camera_for_unproject: focal && up ? { focal_px: r2(focal), principal_point: [r2(pp[0]), r2(pp[1])], up: [r4(up[0]), r4(up[1]), r4(up[2])] } : null,
     intrinsics: focal ? {
       focal_px: r2(focal),
       fov_vertical_deg: r2(deg(2 * Math.atan(H2 / (2 * focal)))),
@@ -62675,6 +62714,67 @@ function solveCamera(size, segments, known) {
     inconsistent,
     warnings,
     notes: "Vanishing points are fitted, not assumed: residual_px is how far each supplied line misses the point it was fitted to, and leave_one_out_px is how far a line misses a point fitted WITHOUT it \u2014 only the second is a real test. Angles are in degrees, lengths in original-image pixels. The distance estimate (if any) is first-order: refine it with the scoring loop, do not trust it to better than ~10%."
+  };
+}
+function worldAxesInCamera(cam) {
+  const up = unit(cam.up);
+  const fwd = [0, 0, 1];
+  const fh = unit([
+    fwd[0] - dot(fwd, up) * up[0],
+    fwd[1] - dot(fwd, up) * up[1],
+    fwd[2] - dot(fwd, up) * up[2]
+  ]);
+  return { X: unit(cross(up, fh)), Y: up, Z: fh };
+}
+function projectPoint(cam, P2, eye = [0, 0, 0]) {
+  const { X, Y: Y2, Z } = worldAxesInCamera(cam);
+  const v2 = [P2[0] - eye[0], P2[1] - eye[1], P2[2] - eye[2]];
+  const c = [
+    v2[0] * X[0] + v2[1] * Y2[0] + v2[2] * Z[0],
+    v2[0] * X[1] + v2[1] * Y2[1] + v2[2] * Z[1],
+    v2[0] * X[2] + v2[1] * Y2[2] + v2[2] * Z[2]
+  ];
+  if (c[2] <= 1e-9) return null;
+  const f2 = cam.focal_px;
+  return [c[0] / c[2] * f2 + cam.principal_point[0], c[1] / c[2] * f2 + cam.principal_point[1]];
+}
+function unprojectPoints(cam, plane, points, eye = [0, 0, 0]) {
+  const { X, Y: Y2, Z } = worldAxesInCamera(cam);
+  const f2 = cam.focal_px;
+  const [cx, cy] = cam.principal_point;
+  const idx = plane.axis === "x" ? 0 : plane.axis === "y" ? 1 : 2;
+  const world = [];
+  const reproj = [];
+  const notes = [];
+  for (const [px2, py] of points) {
+    const d2 = [(px2 - cx) / f2, (py - cy) / f2, 1];
+    const r3 = [dot(d2, X), dot(d2, Y2), dot(d2, Z)];
+    const denom = r3[idx];
+    if (Math.abs(denom) < 1e-9) {
+      world.push(null);
+      reproj.push(null);
+      notes.push(`(${px2},${py}) is parallel to the ${plane.axis} plane \u2014 no intersection`);
+      continue;
+    }
+    const t = (plane.value - eye[idx]) / denom;
+    if (t <= 0) {
+      world.push(null);
+      reproj.push(null);
+      notes.push(`(${px2},${py}) meets the plane BEHIND the camera \u2014 wrong plane for this feature`);
+      continue;
+    }
+    const P2 = [eye[0] + t * r3[0], eye[1] + t * r3[1], eye[2] + t * r3[2]];
+    world.push([r2(P2[0]), r2(P2[1]), r2(P2[2])]);
+    const back = projectPoint(cam, P2, eye);
+    reproj.push(back ? r2(Math.hypot(back[0] - px2, back[1] - py)) : null);
+  }
+  const errs = reproj.filter((v2) => v2 !== null);
+  return {
+    plane,
+    world,
+    reprojection_error_px: reproj,
+    max_reprojection_error_px: errs.length ? r2(Math.max(...errs)) : null,
+    notes: notes.length ? notes : void 0
   };
 }
 
@@ -63374,6 +63474,79 @@ function upscale(src, scale) {
 }
 var MAGENTA = [255, 0, 255];
 var CYAN = [0, 255, 255];
+function viewCropSheet(image, crops, outPath, opts = {}) {
+  if (crops.length === 1) return { ...viewCrop(image, crops[0], outPath, opts), regions: [{ tag: "A", ...crops[0] }] };
+  const full = decodeImage(image);
+  const tiles = crops.slice(0, 6).map((c) => {
+    const { im, ox, oy } = applyCrop(full, c);
+    const scale = opts.scale ?? Math.max(1, Math.min(6, Math.round(640 / Math.max(im.w, im.h))));
+    return { im, ox, oy, scale };
+  });
+  const cols = tiles.length <= 2 ? tiles.length : tiles.length <= 4 ? 2 : 3;
+  const rows = Math.ceil(tiles.length / cols);
+  const cellW = Math.max(...tiles.map((t) => t.im.w * t.scale));
+  const cellH = Math.max(...tiles.map((t) => t.im.h * t.scale));
+  const PAD = 8;
+  const W = cols * cellW + (cols + 1) * PAD;
+  const H2 = rows * cellH + (rows + 1) * PAD;
+  const sheet = { w: W, h: H2, data: new Uint8Array(W * H2 * 4).fill(24) };
+  for (let i = 3; i < sheet.data.length; i += 4) sheet.data[i] = 255;
+  const regions = [];
+  tiles.forEach((t, i) => {
+    const tag = String.fromCharCode(65 + i);
+    const gx = i % cols * (cellW + PAD) + PAD;
+    const gy = Math.floor(i / cols) * (cellH + PAD) + PAD;
+    const up = upscale(t.im, t.scale);
+    let grid = opts.grid ?? 0;
+    if (!grid) {
+      const raw = Math.max(t.im.w, t.im.h) / 8;
+      grid = [5, 10, 20, 25, 50, 100, 200, 500].find((g) => g >= raw) ?? 500;
+    }
+    for (let gxi = Math.ceil(t.ox / grid) * grid; gxi < t.ox + t.im.w; gxi += grid) {
+      const X = Math.round((gxi - t.ox) * t.scale);
+      for (let y = 0; y < up.h; y++) {
+        const j2 = (y * up.w + X) * 4;
+        up.data[j2] = MAGENTA[0];
+        up.data[j2 + 1] = MAGENTA[1];
+        up.data[j2 + 2] = MAGENTA[2];
+      }
+      drawText(up, X + 3, 3, String(gxi), MAGENTA, 1);
+    }
+    for (let gyi = Math.ceil(t.oy / grid) * grid; gyi < t.oy + t.im.h; gyi += grid) {
+      const Y2 = Math.round((gyi - t.oy) * t.scale);
+      for (let x = 0; x < up.w; x++) {
+        const j2 = (Y2 * up.w + x) * 4;
+        up.data[j2] = CYAN[0];
+        up.data[j2 + 1] = CYAN[1];
+        up.data[j2 + 2] = CYAN[2];
+      }
+      drawText(up, 3, Y2 + 3, String(gyi), CYAN, 1);
+    }
+    for (let y = 0; y < up.h; y++) {
+      for (let x = 0; x < up.w; x++) {
+        const src = (y * up.w + x) * 4, dst = ((gy + y) * W + gx + x) * 4;
+        if (gy + y >= H2 || gx + x >= W) continue;
+        sheet.data[dst] = up.data[src];
+        sheet.data[dst + 1] = up.data[src + 1];
+        sheet.data[dst + 2] = up.data[src + 2];
+        sheet.data[dst + 3] = 255;
+      }
+    }
+    drawText(sheet, gx + 4, gy + 4, String(i + 1), [255, 255, 0], 3);
+    regions.push({ tag, index: i + 1, x0: t.ox, y0: t.oy, x1: t.ox + t.im.w, y1: t.oy + t.im.h, scale: t.scale, grid_px: grid });
+  });
+  fs4.mkdirSync(path4.dirname(path4.resolve(outPath)), { recursive: true });
+  const png = new import_pngjs2.PNG({ width: sheet.w, height: sheet.h });
+  png.data = Buffer.from(sheet.data);
+  fs4.writeFileSync(outPath, import_pngjs2.PNG.sync.write(png));
+  return {
+    image,
+    out: outPath,
+    out_size: [sheet.w, sheet.h],
+    regions,
+    notes: "Contact sheet: each tile is numbered (yellow, top-left) and carries its OWN grid labelled in ORIGINAL image coordinates. Match tiles to the `regions` list by index."
+  };
+}
 function viewCrop(image, crop, outPath, opts = {}) {
   const full = decodeImage(image);
   const { im, ox, oy } = applyCrop(full, crop);
@@ -63639,8 +63812,11 @@ be resurrected. (Both happened, repeatedly, in the run that motivated this file.
 <!-- what would change your mind about the current reading -->
 
 ## Score history
-<!-- the save-render gate scores every saved render automatically; log each pass: -->
-| pass | render | mean_edge_px | area_ratio | worst band | what was fixed |
+<!-- The save-render gate appends a row here automatically on every scored save.
+     Fill in the last column yourself \u2014 the numbers say WHAT moved, only you can
+     say what you changed. A pass whose numbers did not move is a pass to think
+     about, not to repeat. -->
+| render | skyline mean px | subject band px | row-edge px | area ratio | what changed |
 |---|---|---|---|---|---|
 
 Reference: \`${referencePublic}\`
@@ -63788,7 +63964,7 @@ var CROP = external_exports.object({
   "Region to scan, in original-image pixels. Use it when foreground clutter (trees, crowds, a tight crop) reaches the frame margins and the sky-bounded detectors report few or no usable rows. Reported coordinates come back in full-image space so they stay comparable across crops."
 );
 function createServer() {
-  const server = new McpServer({ name: "photo-to-threejs", version: "0.5.0" });
+  const server = new McpServer({ name: "photo-to-threejs", version: "0.5.1" });
   server.registerTool(
     "classify_reference",
     {
@@ -63852,16 +64028,16 @@ function createServer() {
   server.registerTool(
     "view_crop",
     {
-      title: "Magnified crop with a coordinate grid \u2014 look closely, keep your bearings",
+      title: "Magnified crop(s) with a coordinate grid \u2014 look closely, keep your bearings",
       description: "Writes a PNG of the crop, upscaled, with a labelled pixel grid burned in (magenta = x, cyan = y, labels in ORIGINAL image coordinates). Use it whenever you need to LOOK at a detail and read positions off what you see \u2014 junctions, eave lines, window corners. Every observed run hand-built exactly this (crop.py + PIL); this version needs no Python and no dependency check. Read the output image with your normal image reading.",
       inputSchema: {
         image: external_exports.string().describe("Absolute path to the photograph (png/jpg)"),
-        crop: external_exports.object({
-          x0: external_exports.number(),
-          y0: external_exports.number(),
-          x1: external_exports.number(),
-          y1: external_exports.number()
-        }).describe("Region to magnify, in ORIGINAL image pixels"),
+        crop: external_exports.union([
+          external_exports.object({ x0: external_exports.number(), y0: external_exports.number(), x1: external_exports.number(), y1: external_exports.number() }),
+          external_exports.array(external_exports.object({ x0: external_exports.number(), y0: external_exports.number(), x1: external_exports.number(), y1: external_exports.number() })).min(1).max(6)
+        ]).describe(
+          "One region, or an ARRAY of up to 6 regions for a contact sheet (all tiles in one image, each numbered and separately gridded). Prefer the array whenever you want to look at several places \u2014 one call instead of six round-trips."
+        ),
         out: external_exports.string().describe("Absolute path for the output PNG"),
         scale: external_exports.number().optional().describe("Upscale factor (default: sized to ~1400 px output)"),
         grid: external_exports.number().optional().describe("Grid step in original pixels (default: a round step giving 8-20 lines)")
@@ -63869,7 +64045,7 @@ function createServer() {
     },
     async ({ image, crop, out, scale, grid }) => {
       logHandshake("tools/call", { tool: "view_crop", image, crop, out });
-      const result = viewCrop(image, crop, out, { scale, grid });
+      const result = Array.isArray(crop) ? viewCropSheet(image, crop, out, { scale, grid }) : viewCrop(image, crop, out, { scale, grid });
       return {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         structuredContent: result
@@ -63936,6 +64112,43 @@ function createServer() {
       const result = solveCamera([im.w, im.h], lines, known);
       return {
         content: [{ type: "text", text: JSON.stringify({ image, ...result }, null, 2) }],
+        structuredContent: result
+      };
+    }
+  );
+  server.registerTool(
+    "unproject",
+    {
+      title: "Pixels \u2192 world coordinates on a plane (use it INSTEAD of measuring features)",
+      description: "Once solve_camera has given you a usable camera, STOP measuring features in pixels: give this tool the camera, a plane, and the image points, and it returns world coordinates. Windows, doors, trim, terrace corners \u2014 all of it. The last field run spent ~25 minutes on magnify-and-measure cycles AFTER its camera was already solved; this is that time back. Planes are named the way you model: the facade is {axis:'z', value:0}, a gable wall {axis:'x', value:0}, the ground {axis:'y', value:0}. Pass `eye` as the camera position in YOUR scene frame (from the camera block: [0, eye_height, -horizontal_distance] with the camera looking toward +Z). Every point is reprojected as a check \u2014 reprojection_error_px near zero means the mapping is sound; a large value means the wrong plane.",
+      inputSchema: {
+        camera: external_exports.object({
+          focal_px: external_exports.number(),
+          principal_point: external_exports.array(external_exports.number()).length(2),
+          up: external_exports.array(external_exports.number()).length(3)
+        }).describe("Pass solve_camera's `camera_for_unproject` back in verbatim"),
+        plane: external_exports.object({
+          axis: external_exports.enum(["x", "y", "z"]),
+          value: external_exports.number()
+        }).describe("The plane the points lie on, e.g. {axis:'z', value:0} for the facade"),
+        points: external_exports.array(external_exports.array(external_exports.number()).length(2)).describe("Image points [[px,py], ...] in ORIGINAL image pixels"),
+        eye: external_exports.array(external_exports.number()).length(3).optional().describe("Camera position in your scene frame, default [0,0,0] (world origin)")
+      }
+    },
+    async ({ camera, plane, points, eye }) => {
+      logHandshake("tools/call", { tool: "unproject", plane, points: points.length });
+      const result = unprojectPoints(
+        {
+          focal_px: camera.focal_px,
+          principal_point: [camera.principal_point[0], camera.principal_point[1]],
+          up: [camera.up[0], camera.up[1], camera.up[2]]
+        },
+        plane,
+        points.map((p2) => [p2[0], p2[1]]),
+        eye ? [eye[0], eye[1], eye[2]] : void 0
+      );
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         structuredContent: result
       };
     }
@@ -64092,7 +64305,7 @@ function createServer() {
           role: "user",
           content: {
             type: "text",
-            text: "Follow this method to rebuild the building in the photograph I provide as a procedural, measured Three.js model. Use this server's tools for the deterministic steps instead of writing your own scripts:\n- LOOK with `view_crop` (magnified, coordinate-gridded crops) and turn edges you can see into numbers with `trace_edge` \u2014 never read pixels by eye.\n- Call `solve_camera` EARLY with rough lines and iterate through its residuals; do not derive vanishing points by hand, and do not polish lines before the first call \u2014 'weak' plus a named worst line IS the workflow.\n- `measure_pitch` for any repeating rhythm; `classify_reference`/`measure_reference` as extra witnesses where a sky-bounded silhouette exists.\n- `init_workspace` for the workspace. It scaffolds RECON.md \u2014 the working ledger. Rewrite it every step: verified facts with evidence, assumptions, REFUTED hypotheses (once buried, they stay dead), and the score history.\n- Every render saved via POST /__save-render is scored automatically and the numbers come back in the save response. Read them EVERY pass, log them in RECON.md, fix the largest error first. Never iterate by eyeballing screenshots.\n\nWhen the targets converge, build the workspace (`npm run build`) and call `open_viewer` so the result appears in the conversation \u2014 the run is not done until the viewer is delivered.\n\n" + skillText()
+            text: "Follow this method to rebuild the building in the photograph I provide as a procedural, measured Three.js model. Use this server's tools for the deterministic steps instead of writing your own scripts:\n- LOOK with `view_crop` (magnified, coordinate-gridded crops) and turn edges you can see into numbers with `trace_edge` \u2014 never read pixels by eye.\n- Call `solve_camera` EARLY with rough lines and iterate through its residuals; do not derive vanishing points by hand, and do not polish lines before the first call \u2014 'weak' plus a named worst line IS the workflow.\n- Once the camera is usable, get feature positions with `unproject` \u2014 do NOT keep measuring windows and doors in pixels; that is the single biggest time sink left in the method.\n- `measure_pitch` for any repeating rhythm; `classify_reference`/`measure_reference` as extra witnesses where a sky-bounded silhouette exists.\n- `init_workspace` for the workspace. It scaffolds RECON.md \u2014 the working ledger. Rewrite it every step: verified facts with evidence, assumptions, REFUTED hypotheses (once buried, they stay dead), and the score history.\n- Every render saved via POST /__save-render is scored automatically and the numbers come back in the save response. Read them EVERY pass, log them in RECON.md, fix the largest error first. Never iterate by eyeballing screenshots.\n\n- Batch independent fixes into one pass, and stop optimising a metric that has moved less than 0.5% of the image diagonal over two passes.\n\nBefore delivering: run `window.__clearance()` (any penetration blocks delivery), review the 3/4, side, rear and top renders with fresh eyes, then build the workspace (`npm run build`) and call `open_viewer` so the result appears in the conversation \u2014 the run is not done until the viewer is delivered.\n\n" + skillText()
           }
         }
       ]

@@ -1,3 +1,4 @@
+import * as THREE from 'three';
 import type { ReferenceTargets } from './types';
 
 /**
@@ -79,6 +80,106 @@ export function installMeasureHarness(getTargets: () => ReferenceTargets) {
         ratio: pct(L(lit) / L(shd), t.ratio),
         widthFrac: pct(w / W, t.widthFrac),
       },
+    }, null, 1);
+  };
+}
+
+/**
+ * __clearance() — does the model intersect ITSELF?
+ *
+ * Every metric in this pipeline compares the render against the photograph
+ * from ONE viewpoint. Nothing checks the model against itself, and a field run
+ * shipped wing windows driven straight through the main roof plane: invisible
+ * in the reference view, obvious from 3/4. The builder had even inspected that
+ * region of its own render and missed it — eyes are demonstrably insufficient
+ * here, so this is deterministic.
+ *
+ * Openings are matched by mesh name (window/door/opening) and roofs by
+ * name (roof/rake/verge) — the naming convention the model stubs establish.
+ * Which meshes matched is always reported, so "nothing found" cannot be
+ * mistaken for "nothing wrong". Subjects with no pitched roof simply match no
+ * roof meshes and the check says so rather than passing silently.
+ */
+export function installClearanceHarness(getRoot: () => THREE.Object3D | null) {
+  (window as unknown as { __clearance: () => string }).__clearance = () => {
+    const root = getRoot();
+    if (!root) return JSON.stringify({ error: 'no model loaded' });
+
+    const openings: THREE.Mesh[] = [];
+    const roofs: THREE.Mesh[] = [];
+    root.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh) return;
+      const n = (m.name || '').toLowerCase();
+      if (/window|door|opening|glaz/.test(n)) openings.push(m);
+      else if (/roof|rake|verge|barge|tile/.test(n)) roofs.push(m);
+    });
+
+    if (!openings.length || !roofs.length) {
+      return JSON.stringify({
+        checked: { openings: openings.length, roofs: roofs.length },
+        penetrations: [],
+        note:
+          'Nothing to compare: this check needs meshes NAMED for openings ' +
+          '(window/door/opening/glaz) and roof planes (roof/rake/verge/barge/tile). ' +
+          'Either this subject has no pitched roof, or the meshes are unnamed — ' +
+          'name them and re-run rather than reading this as a pass.',
+      }, null, 1);
+    }
+
+    const ray = new THREE.Raycaster();
+    ray.far = 0.6; // a window sits at most ~0.5 m proud of / into a plane
+    const penetrations: Record<string, unknown>[] = [];
+
+    for (const w of openings) {
+      w.updateWorldMatrix(true, false);
+      const box = new THREE.Box3().setFromObject(w);
+      const c = box.getCenter(new THREE.Vector3());
+      const size = box.getSize(new THREE.Vector3());
+      // Sample the opening's own extent: centre plus its four corners, inset
+      // slightly so a shared edge does not read as a penetration.
+      const sx = size.x * 0.45, sy = size.y * 0.45, sz = size.z * 0.45;
+      const pts = [
+        c.clone(),
+        c.clone().add(new THREE.Vector3(sx, sy, sz)),
+        c.clone().add(new THREE.Vector3(-sx, sy, -sz)),
+        c.clone().add(new THREE.Vector3(sx, -sy, -sz)),
+        c.clone().add(new THREE.Vector3(-sx, -sy, sz)),
+      ];
+      let worst: { roof: string; depth: number } | null = null;
+      for (const p of pts) {
+        for (const dir of [new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, -1, 0)]) {
+          ray.set(p, dir);
+          const hits = ray.intersectObjects(roofs, false);
+          for (const h of hits) {
+            // A hit within the opening's own half-extent means the roof plane
+            // passes THROUGH the opening's volume.
+            const half = Math.max(size.x, size.y, size.z) * 0.5;
+            if (h.distance < half && (!worst || h.distance < worst.depth)) {
+              worst = { roof: h.object.name || '(unnamed roof mesh)', depth: +h.distance.toFixed(3) };
+            }
+          }
+        }
+      }
+      if (worst) {
+        penetrations.push({
+          opening: w.name || '(unnamed)',
+          intersects: worst.roof,
+          depth_m: worst.depth,
+          centre: [+c.x.toFixed(2), +c.y.toFixed(2), +c.z.toFixed(2)],
+        });
+      }
+    }
+
+    return JSON.stringify({
+      checked: { openings: openings.length, roofs: roofs.length },
+      penetrations,
+      verdict: penetrations.length ? 'FAIL — geometry intersects itself' : 'clear',
+      note: penetrations.length
+        ? 'Move or trim each listed opening so it sits within its wall, below the roof ' +
+          'plane. This is invisible from the reference view and obvious from 3/4 — fix ' +
+          'before delivering.'
+        : undefined,
     }, null, 1);
   };
 }

@@ -5,12 +5,12 @@
   },
   "metadata": {
     "description": "Rebuild a building from one photograph as a procedural, measured Three.js model",
-    "version": "0.5.0"
+    "version": "0.5.1"
   },
   "plugins": [
     {
       "name": "photo-to-threejs-building",
-      "description": "Measurement-first single-photo building reconstruction: the method as a skill (measure, solve the camera, build, score against the photograph's own pixels) plus the MCP server with its deterministic instruments (view_crop, trace_edge, solve_camera, measure_pitch, compare_images, score_render, auto-scoring workspace, inline viewer panel). The skill governs, the tools execute — installing this plugin wires BOTH.",
+      "description": "Measurement-first single-photo building reconstruction: the method as a skill (measure, solve the camera, build, score against the photograph's own pixels) plus the MCP server with its deterministic instruments (view_crop, trace_edge, solve_camera, measure_pitch, compare_images, score_render, auto-scoring workspace, inline viewer panel). The skill governs, the tools execute \u2014 installing this plugin wires BOTH.",
       "source": "./",
       "strict": false,
       "skills": [

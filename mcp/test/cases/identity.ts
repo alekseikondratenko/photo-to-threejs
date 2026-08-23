@@ -1,0 +1,7 @@
+/** Each photo scored against itself: both axes must read exactly zero. */
+import { scoreImages } from "../../src/scan.ts";
+for (const p of process.argv.slice(2)) {
+  const r = scoreImages(p, p) as any;
+  const name = p.split("/").pop()!.replace(/\.(jpe?g|png)$/i, "").replace("reference-", "");
+  console.log(`${name} ${r.silhouette.mean_edge_error_px ?? 0} ${r.skyline?.mean_top_error_px ?? "null"} ${r.skyline?.columns_compared ?? 0}`);
+}

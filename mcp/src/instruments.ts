@@ -68,6 +68,90 @@ function upscale(src: Bitmap, scale: number): Bitmap {
 const MAGENTA: [number, number, number] = [255, 0, 255];
 const CYAN: [number, number, number] = [0, 255, 255];
 
+/**
+ * Contact sheet: several crops in ONE image, each with its own coordinate grid
+ * and a corner tag. A field run issued nine separate view_crop calls, each a
+ * round-trip plus an image read, for regions that were entirely independent.
+ */
+export function viewCropSheet(
+  image: string,
+  crops: Crop[],
+  outPath: string,
+  opts: { scale?: number; grid?: number } = {},
+) {
+  if (crops.length === 1) return { ...viewCrop(image, crops[0], outPath, opts), regions: [{ tag: "A", ...crops[0] }] };
+  const full = decodeImage(image);
+  const tiles = crops.slice(0, 6).map((c) => {
+    const { im, ox, oy } = applyCrop(full, c);
+    // Per-tile scale so no single tile dominates; target ~640 px on the long edge.
+    const scale = opts.scale ?? Math.max(1, Math.min(6, Math.round(640 / Math.max(im.w, im.h))));
+    return { im, ox, oy, scale };
+  });
+  const cols = tiles.length <= 2 ? tiles.length : tiles.length <= 4 ? 2 : 3;
+  const rows = Math.ceil(tiles.length / cols);
+  const cellW = Math.max(...tiles.map((t) => t.im.w * t.scale));
+  const cellH = Math.max(...tiles.map((t) => t.im.h * t.scale));
+  const PAD = 8;
+  const W = cols * cellW + (cols + 1) * PAD;
+  const H = rows * cellH + (rows + 1) * PAD;
+  const sheet: Bitmap = { w: W, h: H, data: new Uint8Array(W * H * 4).fill(24) };
+  for (let i = 3; i < sheet.data.length; i += 4) sheet.data[i] = 255;
+
+  const regions: Record<string, unknown>[] = [];
+  tiles.forEach((t, i) => {
+    const tag = String.fromCharCode(65 + i);
+    const gx = (i % cols) * (cellW + PAD) + PAD;
+    const gy = Math.floor(i / cols) * (cellH + PAD) + PAD;
+    const up = upscale(t.im, t.scale);
+    let grid = opts.grid ?? 0;
+    if (!grid) {
+      const raw = Math.max(t.im.w, t.im.h) / 8;
+      grid = [5, 10, 20, 25, 50, 100, 200, 500].find((g) => g >= raw) ?? 500;
+    }
+    for (let gxi = Math.ceil(t.ox / grid) * grid; gxi < t.ox + t.im.w; gxi += grid) {
+      const X = Math.round((gxi - t.ox) * t.scale);
+      for (let y = 0; y < up.h; y++) {
+        const j = (y * up.w + X) * 4;
+        up.data[j] = MAGENTA[0]; up.data[j + 1] = MAGENTA[1]; up.data[j + 2] = MAGENTA[2];
+      }
+      drawText(up, X + 3, 3, String(gxi), MAGENTA, 1);
+    }
+    for (let gyi = Math.ceil(t.oy / grid) * grid; gyi < t.oy + t.im.h; gyi += grid) {
+      const Y = Math.round((gyi - t.oy) * t.scale);
+      for (let x = 0; x < up.w; x++) {
+        const j = (Y * up.w + x) * 4;
+        up.data[j] = CYAN[0]; up.data[j + 1] = CYAN[1]; up.data[j + 2] = CYAN[2];
+      }
+      drawText(up, 3, Y + 3, String(gyi), CYAN, 1);
+    }
+    for (let y = 0; y < up.h; y++) {
+      for (let x = 0; x < up.w; x++) {
+        const src = (y * up.w + x) * 4, dst = ((gy + y) * W + gx + x) * 4;
+        if (gy + y >= H || gx + x >= W) continue;
+        sheet.data[dst] = up.data[src]; sheet.data[dst + 1] = up.data[src + 1];
+        sheet.data[dst + 2] = up.data[src + 2]; sheet.data[dst + 3] = 255;
+      }
+    }
+    drawText(sheet, gx + 4, gy + 4, String(i + 1), [255, 255, 0], 3);
+    regions.push({ tag, index: i + 1, x0: t.ox, y0: t.oy, x1: t.ox + t.im.w, y1: t.oy + t.im.h, scale: t.scale, grid_px: grid });
+  });
+
+  fs.mkdirSync(path.dirname(path.resolve(outPath)), { recursive: true });
+  const png = new PNG({ width: sheet.w, height: sheet.h });
+  png.data = Buffer.from(sheet.data);
+  fs.writeFileSync(outPath, PNG.sync.write(png));
+
+  return {
+    image,
+    out: outPath,
+    out_size: [sheet.w, sheet.h],
+    regions,
+    notes:
+      "Contact sheet: each tile is numbered (yellow, top-left) and carries its OWN grid " +
+      "labelled in ORIGINAL image coordinates. Match tiles to the `regions` list by index.",
+  };
+}
+
 export function viewCrop(
   image: string,
   crop: Crop,

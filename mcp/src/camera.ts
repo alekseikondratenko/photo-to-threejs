@@ -178,6 +178,41 @@ function autoLabel(s: Segment): string {
   return (dy / (dx || 1e-9)) < 0 ? "horizontal-a" : "horizontal-b";
 }
 
+/**
+ * Normalise however the caller spelled family membership into real families.
+ *
+ * Order: honour explicit shared labels; else cluster by label prefix (the
+ * spelling both field agents used); else fall back to direction. The choice is
+ * reported so a wrong guess is visible rather than silent — same contract as
+ * the scanners' auto-crop.
+ */
+function groupFamilies(segments: Segment[]): {
+  labelled: (Segment & { label: string })[];
+  grouping: "as-given" | "prefix" | "direction";
+} {
+  const given = segments.filter((s) => s.label && s.label.trim().length);
+  if (given.length === segments.length) {
+    const counts = new Map<string, number>();
+    for (const s of segments) counts.set(s.label!, (counts.get(s.label!) ?? 0) + 1);
+    const singles = [...counts.values()].filter((n) => n === 1).length;
+    // Mostly-singleton labels mean the caller named LINES, not families.
+    if (singles <= counts.size / 2) {
+      return { labelled: segments.map((s) => ({ ...s, label: s.label! })), grouping: "as-given" };
+    }
+    const prefixOf = (l: string) => l.split(/[-_.]/)[0] || l;
+    const pc = new Map<string, number>();
+    for (const s of segments) pc.set(prefixOf(s.label!), (pc.get(prefixOf(s.label!)) ?? 0) + 1);
+    const prefixSingles = [...pc.values()].filter((n) => n === 1).length;
+    if (pc.size >= 2 && prefixSingles <= pc.size / 2) {
+      return {
+        labelled: segments.map((s) => ({ ...s, label: prefixOf(s.label!) })),
+        grouping: "prefix",
+      };
+    }
+  }
+  return { labelled: segments.map((s) => ({ ...s, label: s.label ?? autoLabel(s) })), grouping: "direction" };
+}
+
 export function solveCamera(
   size: [number, number],
   segments: Segment[],
@@ -194,12 +229,24 @@ export function solveCamera(
     );
   }
 
-  const labelled = segments.map((s) => ({ ...s, label: s.label ?? autoLabel(s) }));
-  if (segments.some((s) => !s.label)) {
+  // ---- Family grouping. Lines PARALLEL IN THE WORLD must land in one family;
+  // how the caller spells that is not something to be strict about. Two
+  // independent field agents labelled every line individually with the family
+  // as a prefix ('v-win1-jamb', 'R_ridge', 'G_uppersill') and got N singleton
+  // families and a hard error. That is a schema defect, not agent error:
+  // descriptive per-line names are the natural thing to write.
+  const { labelled, grouping } = groupFamilies(segments);
+  if (grouping === "prefix") {
     warnings.push(
-      "some lines had no label, so families were guessed from direction " +
+      "labels looked per-line, so families were grouped by their common PREFIX " +
+      "(text before the first '-', '_' or '.'). Check the families below — if the " +
+      "grouping is wrong, re-send with one shared label per family.",
+    );
+  } else if (grouping === "direction") {
+    warnings.push(
+      "labels were missing or all distinct, so families were guessed from direction " +
       "(near-vertical → 'vertical', others split by slope sign). Check the grouping " +
-      "below before trusting the pose; supply labels to control it.",
+      "below before trusting the pose; supply one shared label per family to control it.",
     );
   }
 
@@ -264,7 +311,11 @@ export function solveCamera(
   const horizontals = families.filter((f) => !f.vertical);
 
   if (horizontals.length < 1) {
-    throw new Error("no horizontal family found — label at least one family of eave/sill/ridge lines");
+    throw new Error(
+      "no horizontal family found — label lines by FAMILY, not per line: three eave " +
+      "lines all labelled \"eave\" (or \"eave-a\"/\"eave-b\" for two facades), not " +
+      "\"eave-left\"/\"eave-mid\"/\"eave-right\". Lines parallel in the WORLD share a label.",
+    );
   }
 
   // ---- Horizon: the join of two horizontal vanishing points. Homogeneous
@@ -295,7 +346,32 @@ export function solveCamera(
   // 2000x890 hero crop of a 2000x1240 render — verticals parallel, horizon at
   // y=618, frame centre at 445; the agent derived the correct treatment by
   // hand while this tool would have got it wrong).
-  if (verticalFam && !verticalFam.finite && h0?.point && h1?.point) {
+  //
+  // The decision uses its OWN parallel test, deliberately tighter than the
+  // `finite` flag used for reporting: a field solve fitted two short jambs to a
+  // vanishing point 70,000 px away — parallel for every practical purpose, the
+  // apparent convergence pure pick noise — and the 50-diagonal reporting cap
+  // let it through as "finite", so this branch was skipped and the principal
+  // point wrongly stayed at frame centre.
+  //
+  // The tightening cuts BOTH ways and the tower case is the one to protect: a
+  // ground-level photograph of a tall building has REAL vertical convergence
+  // (that is the method's textbook case) and must keep its tilt. So the branch
+  // needs the verticals to be effectively parallel — VP beyond 8 diagonals, or
+  // an implied tilt under 1.5° — before it treats the frame as shifted/cropped.
+  const verticallyParallel = (() => {
+    if (!verticalFam) return false;
+    if (!verticalFam.finite) return true;
+    const p = verticalFam.point;
+    if (!p) return true;
+    if (Math.hypot(p[0] - W / 2, p[1] - H / 2) > 8 * diag) return true;
+    // Implied tilt from the vertical VP against a centre-assumed focal guess:
+    // a VP this far out with so little offset cannot represent a real tilt.
+    const guessF = Math.max(W, H);
+    return Math.abs(deg(Math.atan2(guessF, Math.abs(p[1] - H / 2)))) > 88.5;
+  })();
+
+  if (verticalFam && verticallyParallel && h0?.point && h1?.point) {
     const hy = horizonY(W / 2);
     if (hy !== null && Math.abs(hy - H / 2) > H * 0.04) {
       pp = [W / 2, hy];
@@ -603,6 +679,10 @@ export function solveCamera(
           y_at_xmax: horizonY(W) === null ? null : r2(horizonY(W)!),
         }
       : null,
+    /** Everything `unproject` needs, ready to pass straight back in. */
+    camera_for_unproject: focal && up
+      ? { focal_px: r2(focal), principal_point: [r2(pp[0]), r2(pp[1])], up: [r4(up[0]), r4(up[1]), r4(up[2])] }
+      : null,
     intrinsics: focal
       ? {
           focal_px: r2(focal),
@@ -653,5 +733,118 @@ export function solveCamera(
       "point fitted WITHOUT it — only the second is a real test. Angles are in degrees, " +
       "lengths in original-image pixels. The distance estimate (if any) is first-order: " +
       "refine it with the scoring loop, do not trust it to better than ~10%.",
+  };
+}
+
+// ---------------------------------------------------------------- unproject
+
+/**
+ * Camera parameters as `solve_camera` reports them — pass its result straight
+ * back in.
+ */
+export interface SolvedCamera {
+  focal_px: number;
+  principal_point: [number, number];
+  /** World-up expressed in CAMERA coordinates (solve_camera's `up`). */
+  up: Vec3;
+}
+
+/**
+ * The camera's three axes, in camera coordinates, mapped to world X/Y/Z.
+ *
+ * World frame convention: Y is up, Z is the camera's horizontal view
+ * direction, X completes a right-handed set. That makes the frame the agent
+ * actually models in — a facade at z = 0, a gable wall at x = 0, ground at
+ * y = 0 — which is the whole point of this tool.
+ */
+function worldAxesInCamera(cam: SolvedCamera) {
+  const up = unit(cam.up);
+  const fwd: Vec3 = [0, 0, 1];
+  const fh = unit([
+    fwd[0] - dot(fwd, up) * up[0],
+    fwd[1] - dot(fwd, up) * up[1],
+    fwd[2] - dot(fwd, up) * up[2],
+  ]);
+  return { X: unit(cross(up, fh)), Y: up, Z: fh };
+}
+
+/** World → pixel. Exact inverse of the ray construction in unprojectPoints. */
+export function projectPoint(
+  cam: SolvedCamera,
+  P: Vec3,
+  eye: Vec3 = [0, 0, 0],
+): [number, number] | null {
+  const { X, Y, Z } = worldAxesInCamera(cam);
+  const v: Vec3 = [P[0] - eye[0], P[1] - eye[1], P[2] - eye[2]];
+  // A world vector rebuilt in camera coordinates from its world components.
+  const c: Vec3 = [
+    v[0] * X[0] + v[1] * Y[0] + v[2] * Z[0],
+    v[0] * X[1] + v[1] * Y[1] + v[2] * Z[1],
+    v[0] * X[2] + v[1] * Y[2] + v[2] * Z[2],
+  ];
+  if (c[2] <= 1e-9) return null; // behind the camera
+  const f = cam.focal_px;
+  return [(c[0] / c[2]) * f + cam.principal_point[0], (c[1] / c[2]) * f + cam.principal_point[1]];
+}
+
+/**
+ * Pixels → world, on a named plane.
+ *
+ * The natural next need once the camera is solved: "where is this window in
+ * world coordinates?" Every observed run answered it by MEASURING each feature
+ * in pixels instead — ~15 magnify-look-measure cycles in the last run, roughly
+ * 25 minutes, all of it AFTER the camera was already known. One run hand-built
+ * this tool and hit an axis-confusion bug (projected 6370,52 where 900,500 was
+ * expected) that cost a debug cycle — which is why the round-trip check here is
+ * not optional: every unprojected point is reprojected and its error reported.
+ */
+export function unprojectPoints(
+  cam: SolvedCamera,
+  plane: { axis: "x" | "y" | "z"; value: number },
+  points: [number, number][],
+  /** Camera position in WORLD coordinates. Default: the world origin. */
+  eye: Vec3 = [0, 0, 0],
+) {
+  const { X, Y, Z } = worldAxesInCamera(cam);
+  const f = cam.focal_px;
+  const [cx, cy] = cam.principal_point;
+  const idx = plane.axis === "x" ? 0 : plane.axis === "y" ? 1 : 2;
+
+  const world: ([number, number, number] | null)[] = [];
+  const reproj: (number | null)[] = [];
+  const notes: string[] = [];
+
+  for (const [px, py] of points) {
+    // Camera-space ray, then its components along the world axes. No manual
+    // sign flips: image y is down and `up` already carries that, so the dot
+    // product against world-up comes out positive for points above centre.
+    const d: Vec3 = [(px - cx) / f, (py - cy) / f, 1];
+    const r: Vec3 = [dot(d, X), dot(d, Y), dot(d, Z)];
+
+    const denom = r[idx];
+    if (Math.abs(denom) < 1e-9) {
+      world.push(null); reproj.push(null);
+      notes.push(`(${px},${py}) is parallel to the ${plane.axis} plane — no intersection`);
+      continue;
+    }
+    const t = (plane.value - eye[idx]) / denom;
+    if (t <= 0) {
+      world.push(null); reproj.push(null);
+      notes.push(`(${px},${py}) meets the plane BEHIND the camera — wrong plane for this feature`);
+      continue;
+    }
+    const P: Vec3 = [eye[0] + t * r[0], eye[1] + t * r[1], eye[2] + t * r[2]];
+    world.push([r2(P[0]), r2(P[1]), r2(P[2])]);
+    const back = projectPoint(cam, P, eye);
+    reproj.push(back ? r2(Math.hypot(back[0] - px, back[1] - py)) : null);
+  }
+
+  const errs = reproj.filter((v): v is number => v !== null);
+  return {
+    plane,
+    world,
+    reprojection_error_px: reproj,
+    max_reprojection_error_px: errs.length ? r2(Math.max(...errs)) : null,
+    notes: notes.length ? notes : undefined,
   };
 }

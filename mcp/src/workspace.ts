@@ -130,8 +130,11 @@ be resurrected. (Both happened, repeatedly, in the run that motivated this file.
 <!-- what would change your mind about the current reading -->
 
 ## Score history
-<!-- the save-render gate scores every saved render automatically; log each pass: -->
-| pass | render | mean_edge_px | area_ratio | worst band | what was fixed |
+<!-- The save-render gate appends a row here automatically on every scored save.
+     Fill in the last column yourself — the numbers say WHAT moved, only you can
+     say what you changed. A pass whose numbers did not move is a pass to think
+     about, not to repeat. -->
+| render | skyline mean px | subject band px | row-edge px | area ratio | what changed |
 |---|---|---|---|---|---|
 
 Reference: \`${referencePublic}\`

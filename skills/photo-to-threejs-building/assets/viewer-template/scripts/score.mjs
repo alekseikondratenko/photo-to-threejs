@@ -142,11 +142,13 @@ function skyline(im, tol = 42) {
   return out;
 }
 
-function skylineScore(ref, ren) {
+function skylineScore(ref, ren, span) {
   const a = skyline(ref), b = skyline(ren);
   const errs = [];
   const cols = [];
-  for (let x = Math.round(ref.w * 0.03); x < ref.w * 0.97; x++) {
+  const lo = span ? Math.max(0, Math.round(span.x0)) : Math.round(ref.w * 0.03);
+  const hi = span ? Math.min(ref.w, Math.round(span.x1)) : ref.w * 0.97;
+  for (let x = lo; x < hi; x++) {
     if (a[x] >= 0 && b[x] >= 0) { errs.push(Math.abs(a[x] - b[x])); cols.push(x); }
   }
   if (!errs.length) return null;
@@ -164,8 +166,72 @@ function skylineScore(ref, ren) {
   };
 }
 
+/**
+ * Lit/shadow band luma and their ratio — the numbers lighting passes are tuned
+ * against. A field run flew FIVE consecutive lighting passes with no feedback
+ * because this gate reported silhouette only; the agent had to call
+ * score_render separately to get numbers the save response should have carried.
+ */
+function bandStats(im, sil) {
+  const ls = [], rs = [];
+  for (let y = 0; y < im.h; y++) {
+    const { left, right, width } = sil[y];
+    if (width < im.w * 0.05) continue;
+    const third = Math.max(1, (width / 3) | 0);
+    for (let x = left; x < Math.min(left + third, im.w); x++) { const p = px(im, x, y); ls.push(luma(...p)); }
+    for (let x = Math.max(right - third, 0); x < right; x++) { const p = px(im, x, y); rs.push(luma(...p)); }
+  }
+  if (!ls.length || !rs.length) return null;
+  const mean = (a) => a.reduce((s, v) => s + v, 0) / a.length;
+  const a = mean(ls), b = mean(rs);
+  return {
+    left_band_luma: Math.round(a * 10) / 10,
+    right_band_luma: Math.round(b * 10) / 10,
+    lit_over_shadow_ratio: Math.round((Math.max(a, b) / Math.max(1, Math.min(a, b))) * 1000) / 1000,
+  };
+}
+
+/** In-silhouette luma distribution — overall exposure of the subject. */
+function inLuma(im, sil) {
+  const vals = [];
+  for (let y = 0; y < im.h; y++) {
+    const { left, right, width } = sil[y];
+    if (width < im.w * 0.05) continue;
+    for (let x = left; x <= right; x += 2) { const p = px(im, x, y); vals.push(luma(...p)); }
+  }
+  if (!vals.length) return null;
+  vals.sort((a, b) => a - b);
+  const at = (f) => Math.round(vals[Math.min(vals.length - 1, (vals.length * f) | 0)] * 10) / 10;
+  return { mean: Math.round((vals.reduce((s, v) => s + v, 0) / vals.length) / 1 * 10) / 10, p10: at(0.1), p50: at(0.5), p90: at(0.9) };
+}
+
+/** Sky luma at fixed heights — the gradient the scene's sky is scored against. */
+function skySamples(im) {
+  return [0.05, 0.2, 0.4, 0.6, 0.75].map((f) => {
+    const s = rowSkyLR(im, Math.min(im.h - 1, Math.round(im.h * f)));
+    const m = skyAtX(s, im.w >> 1, im.w);
+    return { at_height_frac: f, luma: Math.round(luma(m[0], m[1], m[2]) * 10) / 10 };
+  });
+}
+
+/** A uniform frame means the page errored or the canvas was read before a
+ *  paint — three of these appeared across two field runs, each scored as a
+ *  silent null the agent had to diagnose from nothing. */
+export function isDegenerate(im) {
+  let min = 255, max = 0;
+  const step = Math.max(1, Math.floor(Math.sqrt((im.w * im.h) / 4000)));
+  for (let y = 0; y < im.h; y += step) {
+    for (let x = 0; x < im.w; x += step) {
+      const l = luma(...px(im, x, y));
+      if (l < min) min = l;
+      if (l > max) max = l;
+    }
+  }
+  return max - min < 2;
+}
+
 /** Score a render against a reference — same shape as score_render's silhouette block. */
-export function scoreImages(renderPath, refPath) {
+export function scoreImages(renderPath, refPath, span) {
   const ref = decodeImage(refPath);
   const ren = resize(decodeImage(renderPath), ref.w, ref.h);
   const sRef = silhouette(ref);
@@ -206,12 +272,26 @@ export function scoreImages(renderPath, refPath) {
     area_ratio: Math.round((area(sRen) / Math.max(1, area(sRef))) * 1000) / 1000,
   };
 
-  return {
+  const result = {
     ...rowWise,
     // The transpose measurement — the primary signal on wide/occluded
     // subjects where rows_compared is small. Trust whichever axis compared
     // more of the subject.
     skyline: skylineScore(ref, ren),
     unreliable_row_scan: n < 30 || null,
+    luma: {
+      bands: { ref: bandStats(ref, sRef), render: bandStats(ren, sRen) },
+      in_silhouette: { ref: inLuma(ref, sRef), render: inLuma(ren, sRen) },
+      sky: { ref: skySamples(ref), render: skySamples(ren) },
+    },
   };
+
+  // Aimed scoring: on this reference the full-frame flanks measure TREES, not
+  // building (a field run read 487/585 px flanks against a 107 px middle and
+  // hand-built its own subject-scoped checker rather than trust the number).
+  // The span block is additive — the full-frame numbers always stay.
+  if (span && Number.isFinite(span.x0) && Number.isFinite(span.x1)) {
+    result.subject_span = { ...span, skyline: skylineScore(ref, ren, span) };
+  }
+  return result;
 }

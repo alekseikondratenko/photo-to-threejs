@@ -1,14 +1,14 @@
 {
   "name": "photo-to-threejs-mcp",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "node test/run.mjs",
     "build": "vite build",
     "serve": "tsx main.ts",
     "stdio": "tsx main.ts --stdio",
     "typecheck": "tsc --noEmit",
-    "build:server": "esbuild main.ts --bundle --platform=node --format=esm --outfile=dist/server.mjs --banner:js=\"import { createRequire } from \\x27node:module\\x27; const require = createRequire(import.meta.url);\""
+    "build:server": "node build-server.mjs"
   },
   "keywords": [],
   "author": "",

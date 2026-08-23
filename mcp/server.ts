@@ -27,8 +27,8 @@ import path from "node:path";
 import { z } from "zod";
 import { logHandshake } from "./log.ts";
 import { inlineViewer } from "./src/bundle.ts";
-import { solveCamera } from "./src/camera.ts";
-import { traceEdge, viewCrop } from "./src/instruments.ts";
+import { solveCamera, unprojectPoints } from "./src/camera.ts";
+import { traceEdge, viewCrop, viewCropSheet } from "./src/instruments.ts";
 import { BUNDLE_META } from "./src/protocol.ts";
 import {
   classifyReference,
@@ -103,7 +103,7 @@ const CROP = z
   );
 
 export function createServer(): McpServer {
-  const server = new McpServer({ name: "photo-to-threejs", version: "0.5.0" });
+  const server = new McpServer({ name: "photo-to-threejs", version: "0.5.1" });
 
   server.registerTool(
     "classify_reference",
@@ -196,7 +196,7 @@ export function createServer(): McpServer {
   server.registerTool(
     "view_crop",
     {
-      title: "Magnified crop with a coordinate grid — look closely, keep your bearings",
+      title: "Magnified crop(s) with a coordinate grid — look closely, keep your bearings",
       description:
         "Writes a PNG of the crop, upscaled, with a labelled pixel grid burned in " +
         "(magenta = x, cyan = y, labels in ORIGINAL image coordinates). Use it whenever " +
@@ -206,9 +206,16 @@ export function createServer(): McpServer {
         "output image with your normal image reading.",
       inputSchema: {
         image: z.string().describe("Absolute path to the photograph (png/jpg)"),
-        crop: z.object({
-          x0: z.number(), y0: z.number(), x1: z.number(), y1: z.number(),
-        }).describe("Region to magnify, in ORIGINAL image pixels"),
+        crop: z
+          .union([
+            z.object({ x0: z.number(), y0: z.number(), x1: z.number(), y1: z.number() }),
+            z.array(z.object({ x0: z.number(), y0: z.number(), x1: z.number(), y1: z.number() })).min(1).max(6),
+          ])
+          .describe(
+            "One region, or an ARRAY of up to 6 regions for a contact sheet (all tiles in " +
+            "one image, each numbered and separately gridded). Prefer the array whenever " +
+            "you want to look at several places — one call instead of six round-trips.",
+          ),
         out: z.string().describe("Absolute path for the output PNG"),
         scale: z.number().optional().describe("Upscale factor (default: sized to ~1400 px output)"),
         grid: z.number().optional().describe("Grid step in original pixels (default: a round step giving 8-20 lines)"),
@@ -216,7 +223,9 @@ export function createServer(): McpServer {
     },
     async ({ image, crop, out, scale, grid }) => {
       logHandshake("tools/call", { tool: "view_crop", image, crop, out });
-      const result = viewCrop(image, crop, out, { scale, grid });
+      const result = Array.isArray(crop)
+        ? viewCropSheet(image, crop, out, { scale, grid })
+        : viewCrop(image, crop, out, { scale, grid });
       return {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         structuredContent: result as unknown as Record<string, unknown>,
@@ -322,6 +331,64 @@ export function createServer(): McpServer {
       const result = solveCamera([im.w, im.h], lines, known);
       return {
         content: [{ type: "text", text: JSON.stringify({ image, ...result }, null, 2) }],
+        structuredContent: result as unknown as Record<string, unknown>,
+      };
+    },
+  );
+
+  server.registerTool(
+    "unproject",
+    {
+      title: "Pixels → world coordinates on a plane (use it INSTEAD of measuring features)",
+      description:
+        "Once solve_camera has given you a usable camera, STOP measuring features in " +
+        "pixels: give this tool the camera, a plane, and the image points, and it returns " +
+        "world coordinates. Windows, doors, trim, terrace corners — all of it. The last " +
+        "field run spent ~25 minutes on magnify-and-measure cycles AFTER its camera was " +
+        "already solved; this is that time back. Planes are named the way you model: the " +
+        "facade is {axis:'z', value:0}, a gable wall {axis:'x', value:0}, the ground " +
+        "{axis:'y', value:0}. Pass `eye` as the camera position in YOUR scene frame (from " +
+        "the camera block: [0, eye_height, -horizontal_distance] with the camera looking " +
+        "toward +Z). Every point is reprojected as a check — reprojection_error_px near " +
+        "zero means the mapping is sound; a large value means the wrong plane.",
+      inputSchema: {
+        camera: z
+          .object({
+            focal_px: z.number(),
+            principal_point: z.array(z.number()).length(2),
+            up: z.array(z.number()).length(3),
+          })
+          .describe("Pass solve_camera's `camera_for_unproject` back in verbatim"),
+        plane: z
+          .object({
+            axis: z.enum(["x", "y", "z"]),
+            value: z.number(),
+          })
+          .describe("The plane the points lie on, e.g. {axis:'z', value:0} for the facade"),
+        points: z
+          .array(z.array(z.number()).length(2))
+          .describe("Image points [[px,py], ...] in ORIGINAL image pixels"),
+        eye: z
+          .array(z.number())
+          .length(3)
+          .optional()
+          .describe("Camera position in your scene frame, default [0,0,0] (world origin)"),
+      },
+    },
+    async ({ camera, plane, points, eye }) => {
+      logHandshake("tools/call", { tool: "unproject", plane, points: points.length });
+      const result = unprojectPoints(
+        {
+          focal_px: camera.focal_px,
+          principal_point: [camera.principal_point[0], camera.principal_point[1]],
+          up: [camera.up[0], camera.up[1], camera.up[2]],
+        },
+        plane,
+        points.map((p) => [p[0], p[1]] as [number, number]),
+        eye ? ([eye[0], eye[1], eye[2]] as [number, number, number]) : undefined,
+      );
+      return {
+        content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         structuredContent: result as unknown as Record<string, unknown>,
       };
     },
@@ -532,6 +599,9 @@ export function createServer(): McpServer {
               "- Call `solve_camera` EARLY with rough lines and iterate through its " +
               "residuals; do not derive vanishing points by hand, and do not polish lines " +
               "before the first call — 'weak' plus a named worst line IS the workflow.\n" +
+              "- Once the camera is usable, get feature positions with `unproject` — do NOT " +
+              "keep measuring windows and doors in pixels; that is the single biggest " +
+              "time sink left in the method.\n" +
               "- `measure_pitch` for any repeating rhythm; `classify_reference`/" +
               "`measure_reference` as extra witnesses where a sky-bounded silhouette exists.\n" +
               "- `init_workspace` for the workspace. It scaffolds RECON.md — the working " +
@@ -541,9 +611,13 @@ export function createServer(): McpServer {
               "numbers come back in the save response. Read them EVERY pass, log them in " +
               "RECON.md, fix the largest error first. Never iterate by eyeballing " +
               "screenshots.\n\n" +
-              "When the targets converge, build the workspace (`npm run build`) and call " +
-              "`open_viewer` so the result appears in the conversation — the run is not " +
-              "done until the viewer is delivered.\n\n" +
+              "- Batch independent fixes into one pass, and stop optimising a metric that " +
+              "has moved less than 0.5% of the image diagonal over two passes.\n\n" +
+              "Before delivering: run `window.__clearance()` (any penetration blocks " +
+              "delivery), review the 3/4, side, rear and top renders with fresh eyes, then " +
+              "build the workspace (`npm run build`) and call `open_viewer` so the result " +
+              "appears in the conversation — the run is not done until the viewer is " +
+              "delivered.\n\n" +
               skillText(),
           },
         },

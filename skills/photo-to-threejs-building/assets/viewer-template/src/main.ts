@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { installMeasureHarness } from './lib/measure';
+import { installClearanceHarness, installMeasureHarness } from './lib/measure';
 import type { BuildingModel, View, ModelRuntime } from './lib/types';
 
 // Add your subjects here: write models/<id>.ts + scenes/<id>.ts (see the
@@ -186,6 +186,54 @@ addEventListener('resize', () => {
 });
 
 installMeasureHarness(() => active.targets);
+installClearanceHarness(() => root);
+
+/**
+ * Render-on-demand, dev only.
+ *
+ * Saving a scored render used to mean driving the browser: switch view, run
+ * toDataURL, POST. That overhead is paid on EVERY pass, and a field run made
+ * twenty-one of them. With this loop the whole pass is: edit the file, then one
+ * `curl -XPOST /__render -d '{"view":"ref","name":"pass7.png"}'` — the page
+ * renders the requested view at exact size, saves it, and the score comes back
+ * in the save response.
+ */
+if (import.meta.env.DEV) {
+  const poll = async () => {
+    try {
+      const r = await fetch('/__render-queue');
+      if (r.ok) {
+        const job = await r.json();
+        if (job && job.name) {
+          if (job.view && active.views[job.view as keyof typeof active.views]) {
+            setView(active.views[job.view as keyof typeof active.views]);
+          }
+          if (typeof job.context === 'boolean') {
+            ctxOn = job.context;
+            byId('t-ctx').classList.toggle('on', ctxOn);
+            const n = runtime.nodes['site-context'];
+            if (n) n.visible = ctxOn;
+          }
+          // Two frames: one to apply the view, one to be sure it painted.
+          await new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(res)));
+          const canvas = document.querySelector('canvas') as HTMLCanvasElement;
+          await fetch('/__save-render', {
+            method: 'POST',
+            body: JSON.stringify({
+              name: job.name,
+              dataUrl: canvas.toDataURL('image/png'),
+              span: job.span,
+            }),
+          });
+        }
+      }
+    } catch {
+      /* dev-server hiccup; keep polling */
+    }
+    setTimeout(poll, 1000);
+  };
+  poll();
+}
 // debug handles for the render-review loop
 Object.assign(window as unknown as Record<string, unknown>, {
   __scene: scene, __camera: camera, __renderer: renderer, __controls: controls,
