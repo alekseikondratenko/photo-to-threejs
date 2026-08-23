@@ -97,6 +97,40 @@ measuring the subject's column extent — the scorer then reports a subject-band
 every save"); the template's render-trigger and save helper forward `active.targets.span`
 automatically when set. One measured pair of numbers, set once, applied to every pass.
 
+### A1b. Converged verdict in the gate — the stop signal, routed like everything else
+
+**Evidence (run 5, decisive):** passes 9–12 scored 108 → 110 → 110.4 → 110.4 — four
+passes, ~25 minutes, net progress zero. The run stopped at EXACTLY the soft budget of
+12, which means the number acted as an anchor, not the plateau rule: left uncapped it
+would plausibly have kept going, and the plateau rule (skill prose) went the way of
+every other prose rule. Same law, fourth confirmation: stop decisions must be routed
+through tool output.
+
+**Exactly what:** the gate already computes deltas. When a metric has moved less than
+0.5% of the image diagonal across the last two DIFFERENT-named saves, the save response
+says so explicitly and prescriptively:
+`converged: {skyline: true, note: "geometry has not moved in 2 passes — further
+geometry passes are waste. Move to the finish checks (__clearance, views) and
+delivery."}`
+Soft budget in the skill drops to **~8** with the existing justify-to-exceed escape —
+the budget becomes a backstop, not the operative stop, because the gate now carries the
+stop.
+
+### A1c. Error localisation in the score — attack the thinking time itself
+
+**Evidence:** refinement wall-clock barely moved (77 → ~70 min) despite 2× per-pass
+efficiency, because each pass still costs 6–10 minutes of LOOKING — open the evidence
+pack, stare at the overlay, decide which element is wrong. The score says HOW MUCH is
+wrong; nothing says WHERE.
+
+**Exactly what:** the skyline comparison already holds per-column errors. Report the
+top-3 worst CONTIGUOUS SEGMENTS with pixel ranges and directions:
+`worst_segments: [{x0: 1180, x1: 1400, mean_err: 42, direction: "render skyline too
+HIGH"}, ...]`
+The agent knows which element lives at columns 1180–1400 (it measured them); the fix
+decision becomes near-mechanical, like a compiler pointing at the line instead of
+saying "there are errors". Projected: per-pass think time from ~6–8 min toward ~3–4.
+
 ### A4b. Blank-guard message wording
 
 **Evidence:** when p6 came back black, the guard's message worked — but the agent's
