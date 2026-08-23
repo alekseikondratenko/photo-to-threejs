@@ -142,18 +142,79 @@ function skyline(im, tol = 42) {
   return out;
 }
 
+/**
+ * The worst contiguous stretches of skyline, with a direction for each.
+ *
+ * The score says HOW MUCH is wrong; until now nothing said WHERE. Field runs
+ * spent 6-10 minutes per pass staring at the overlay deciding which element to
+ * fix — the single largest remaining cost in refinement. The agent already
+ * knows which element lives at columns 1180-1400 (it measured them), so a
+ * located error turns a judgement call into a lookup: a compiler pointing at
+ * the line instead of saying "there are errors".
+ *
+ * Signed convention: image y grows DOWNWARD, so a render row smaller than the
+ * photograph's means the render's top edge sits HIGHER in the frame.
+ */
+function worstSegments(cols, signed, limit = 3) {
+  const abs = signed.map((v) => Math.abs(v));
+  // Noise floor: 4 px, or 1.5x the median column error, whichever is larger —
+  // on a converged render nothing should qualify, and nothing should be
+  // reported (a located error that is only noise is worse than silence).
+  const thr = Math.max(4, median(abs) * 1.5);
+  const segs = [];
+  let cur = null;
+  for (let i = 0; i < cols.length; i++) {
+    if (abs[i] <= thr) continue;
+    const sign = Math.sign(signed[i]);
+    // Continue the run across small gaps, but never across a sign flip: two
+    // adjacent errors in opposite directions are two different fixes.
+    if (cur && cols[i] - cur.x1 <= 12 && cur.sign === sign) {
+      cur.errs.push(abs[i]);
+      cur.x1 = cols[i];
+    } else {
+      if (cur) segs.push(cur);
+      cur = { x0: cols[i], x1: cols[i], sign, errs: [abs[i]] };
+    }
+  }
+  if (cur) segs.push(cur);
+  const out = segs
+    .filter((s) => s.errs.length >= 12)
+    .map((s) => {
+      const meanAbs = s.errs.reduce((a, b) => a + b, 0) / s.errs.length;
+      return {
+        x0: s.x0,
+        x1: s.x1,
+        columns: s.errs.length,
+        mean_err_px: Math.round(meanAbs * 10) / 10,
+        direction:
+          s.sign < 0
+            ? 'render skyline too HIGH (render top edge is above the photograph\'s)'
+            : 'render skyline too LOW (render top edge is below the photograph\'s)',
+        _mass: meanAbs * s.errs.length,
+      };
+    })
+    // Rank by total error mass, not by peak: a 300-column band off by 20 px is
+    // a bigger fix than a 15-column spike off by 40.
+    .sort((a, b) => b._mass - a._mass)
+    .slice(0, limit)
+    .map(({ _mass, ...seg }) => seg);
+  return out.length ? out : null;
+}
+
 function skylineScore(ref, ren, span) {
   const a = skyline(ref), b = skyline(ren);
   const errs = [];
+  const signed = [];
   const cols = [];
   const lo = span ? Math.max(0, Math.round(span.x0)) : Math.round(ref.w * 0.03);
   const hi = span ? Math.min(ref.w, Math.round(span.x1)) : ref.w * 0.97;
   for (let x = lo; x < hi; x++) {
-    if (a[x] >= 0 && b[x] >= 0) { errs.push(Math.abs(a[x] - b[x])); cols.push(x); }
+    if (a[x] >= 0 && b[x] >= 0) { errs.push(Math.abs(a[x] - b[x])); signed.push(b[x] - a[x]); cols.push(x); }
   }
   if (!errs.length) return null;
   const mean = (v) => (v.length ? Math.round((v.reduce((s, e) => s + e, 0) / v.length) * 10) / 10 : null);
   const third = Math.floor(errs.length / 3);
+  const worst = worstSegments(cols, signed);
   return {
     mean_top_error_px: mean(errs),
     top_error_by_band: {
@@ -163,6 +224,11 @@ function skylineScore(ref, ren, span) {
     },
     max_top_error_px: Math.max(...errs),
     columns_compared: errs.length,
+    /** WHERE the error is, in original-image columns. Fix the top one first. */
+    worst_segments: worst,
+    ...(worst
+      ? { worst_segments_note: 'x0/x1 are image columns. Identify which element spans them (you measured it), fix that element, re-render.' }
+      : {}),
   };
 }
 
@@ -273,6 +339,7 @@ export function scoreImages(renderPath, refPath, span) {
   };
 
   const result = {
+    image_size: [ref.w, ref.h],
     ...rowWise,
     // The transpose measurement — the primary signal on wide/occluded
     // subjects where rows_compared is small. Trust whichever axis compared

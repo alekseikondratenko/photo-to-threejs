@@ -62662,8 +62662,34 @@ function solveCamera(size, segments, known) {
       "the fit is weak: either a withheld line missed its own vanishing point by more than 2% of the image diagonal, or the recovered axes are more than 8\xB0 from perpendicular. This is common with hand-picked lines and it is worth acting on \u2014 over randomised cameras, 'usable' fits kept focal error under ~12% while 'weak' ones reached 48%. The fix is nearly always the picking, not the solver: use the LONGEST runs of each family you can see, spread them apart rather than clustering them, and re-pick the worst line named in cross_check.worst_line. Endpoint accuracy is what matters \u2014 a short line pinned to two fuzzy pixels aims its vanishing point badly."
     );
   }
+  const verticalCount = labelled.filter((s) => s.label.toLowerCase().startsWith("vert")).length;
+  const unprojectReady = Boolean(focal && up);
+  const nextSteps = [];
+  if (!unprojectReady) {
+    nextSteps.push(
+      `WARNING: unproject is LOCKED \u2014 no usable vertical family was formed (${verticalCount} vertical line(s) supplied; 2\u20133 are needed: window jambs, building corners, downpipes, labelled 'vertical'). One more solve_camera call with those lines unlocks world-coordinate feature placement, which replaces per-feature pixel measurement outright \u2014 a field run spent ~25 minutes measuring what unproject returns in one call.`
+    );
+  }
+  if (verdict === "usable") {
+    nextSteps.push(
+      "Build the MASSING now (footprint, eave, ridge, wings) and score it. Do NOT measure windows, doors or trim until the massing has scored \u2014 a feature measured against an unverified frame goes stale the moment the frame moves. After the massing scores, get feature positions with unproject, not with per-feature crops."
+    );
+  } else if (verdict === "weak") {
+    nextSteps.push(
+      "Re-pick one line before building: " + (culprit ? `${culprit} \u2014 replace it ` : "replace the worst line named in cross_check.worst_line ") + "with the longest, cleanest run of that family you can see, then solve again. Re-picking is minutes; the geometry a weak fit distorts costs hours."
+    );
+  } else {
+    nextSteps.push(
+      "Do not build on this solve \u2014 it is inconsistent (see `inconsistent`). Fix the picking first: longest runs, spread apart, endpoints on features you can actually see. Derived quantities are withheld deliberately; do not reconstruct them by hand."
+    );
+  }
   return {
     size: [W, H2],
+    /**
+     * What to do with this result. Verdict-conditional and ordered, most
+     * urgent first — the routing that used to live in skill prose.
+     */
+    next: { unproject_locked: !unprojectReady, vertical_lines: verticalCount, do: nextSteps },
     families: families.map((f2) => ({
       label: f2.label,
       lines: f2.count,
@@ -63304,15 +63330,56 @@ function skyline(im, tol = 42) {
   }
   return out;
 }
+function worstSegments(cols, signed, limit = 3) {
+  const abs = signed.map((v2) => Math.abs(v2));
+  const thr = Math.max(4, median(abs) * 1.5);
+  const segs = [];
+  let cur = null;
+  for (let i = 0; i < cols.length; i++) {
+    if (abs[i] <= thr) continue;
+    const sign = Math.sign(signed[i]);
+    if (cur && cols[i] - cur.x1 <= 12 && cur.sign === sign) {
+      cur.errs.push(abs[i]);
+      cur.x1 = cols[i];
+    } else {
+      if (cur) segs.push(cur);
+      cur = { x0: cols[i], x1: cols[i], sign, errs: [abs[i]] };
+    }
+  }
+  if (cur) segs.push(cur);
+  const out = segs.filter((s) => s.errs.length >= 12).map((s) => {
+    const meanAbs = s.errs.reduce((a, b) => a + b, 0) / s.errs.length;
+    return {
+      seg: {
+        x0: s.x0,
+        x1: s.x1,
+        columns: s.errs.length,
+        mean_err_px: Math.round(meanAbs * 10) / 10,
+        direction: s.sign < 0 ? "render skyline too HIGH (render top edge is above the photograph's)" : "render skyline too LOW (render top edge is below the photograph's)"
+      },
+      // Rank by total error mass, not peak: a 300-column band off by 20 px is
+      // a bigger fix than a 15-column spike off by 40.
+      mass: meanAbs * s.errs.length
+    };
+  }).sort((a, b) => b.mass - a.mass).slice(0, limit).map((e) => e.seg);
+  return out.length ? out : null;
+}
 function skylineScore(ref, ren) {
   const a = skyline(ref), b = skyline(ren);
   const errs = [];
+  const signed = [];
+  const cols = [];
   for (let x = Math.round(ref.w * 0.03); x < ref.w * 0.97; x++) {
-    if (a[x] >= 0 && b[x] >= 0) errs.push(Math.abs(a[x] - b[x]));
+    if (a[x] >= 0 && b[x] >= 0) {
+      errs.push(Math.abs(a[x] - b[x]));
+      signed.push(b[x] - a[x]);
+      cols.push(x);
+    }
   }
   if (!errs.length) return null;
   const mean = (v2) => v2.length ? Math.round(v2.reduce((s, e) => s + e, 0) / v2.length * 10) / 10 : null;
   const third = Math.floor(errs.length / 3);
+  const worst = worstSegments(cols, signed);
   return {
     mean_top_error_px: mean(errs),
     top_error_by_band: {
@@ -63321,7 +63388,10 @@ function skylineScore(ref, ren) {
       right: mean(errs.slice(2 * third))
     },
     max_top_error_px: Math.max(...errs),
-    columns_compared: errs.length
+    columns_compared: errs.length,
+    /** WHERE the error is, in original-image columns. Fix the top one first. */
+    worst_segments: worst,
+    ...worst ? { worst_segments_note: "x0/x1 are image columns. Identify which element spans them (you measured it), fix that element, re-render." } : {}
   };
 }
 function scoreImages(renderPath, refPath) {
@@ -63823,7 +63893,17 @@ export const ${id}: BuildingModel = {
   },
   // PLACEHOLDERS \u2014 measure before scoring (a converged score against invented
   // targets is checklist item 13's false-100% trap, deliberately).
-  targets: { litLuma: 128, shadowLuma: 96, ratio: 1.33, widthFrac: 0.5 },
+  targets: {
+    litLuma: 128, shadowLuma: 96, ratio: 1.33, widthFrac: 0.5,
+    // The subject's column extent in the REFERENCE photograph, in original
+    // image pixels. Set it as soon as you know it (the massing pass is the
+    // natural moment) and every scored save from then on carries an extra
+    // subject-band block \u2014 the flanks of a real photograph measure trees and
+    // neighbours, not the building, and a field run read 487/585 px flanks
+    // against a 107 px middle before hand-building its own scoped checker.
+    // Nothing else to remember: the render trigger forwards this for you.
+    span: null, // e.g. { x0: 210, x1: 1780 }
+  },
 };
 `;
 var reconStub = (id, referencePublic) => `# RECON \u2014 ${id}
@@ -64000,7 +64080,7 @@ var CROP = external_exports.object({
   "Region to scan, in original-image pixels. Use it when foreground clutter (trees, crowds, a tight crop) reaches the frame margins and the sky-bounded detectors report few or no usable rows. Reported coordinates come back in full-image space so they stay comparable across crops."
 );
 function createServer() {
-  const server = new McpServer({ name: "photo-to-threejs", version: "0.5.1" });
+  const server = new McpServer({ name: "photo-to-threejs", version: "0.5.2" });
   server.registerTool(
     "classify_reference",
     {
@@ -64121,7 +64201,7 @@ function createServer() {
     "solve_camera",
     {
       title: "Solve the camera from picked lines \u2014 call it EARLY, iterate through it",
-      description: "Give it 4\u201310 line segments along real-world parallel families (vertical edges, eaves, sills, ridges) and it returns vanishing points with per-line residuals, the horizon, focal length, tilt/roll/yaw, eye height, and a ready-to-paste Three.js camera block including the setViewOffset arithmetic for an off-centre principal point. CALL IT EARLY WITH ROUGH LINES \u2014 do not polish lines first. A 'weak' verdict is normal on the first call and the result names the exact worst line to re-pick; iterating through the solver converges in 2\u20133 calls, while gathering 'confident' lines before calling has been measured to cost a 30-minute manual algebra detour that the solver then confirmed in one call. The solver is the instrument for finding out which lines are good, not a finisher for lines already trusted. It is also the arbiter for structural hypotheses: label the lines per hypothesis and the residuals say which reading of the building is consistent. Inconsistent input returns 'inconsistent' plus the offending line, never a forced number. Verticals parallel in the image are handled as a shifted-lens/cropped frame (principal point on the horizon), not a tilt.",
+      description: "Give it 4\u201310 line segments along real-world parallel families (vertical edges, eaves, sills, ridges) and it returns vanishing points with per-line residuals, the horizon, focal length, tilt/roll/yaw, eye height, and a ready-to-paste Three.js camera block including the setViewOffset arithmetic for an off-centre principal point. CALL IT EARLY WITH ROUGH LINES \u2014 do not polish lines first. A 'weak' verdict is normal on the first call and the result names the exact worst line to re-pick; iterating through the solver converges in 2\u20133 calls, while gathering 'confident' lines before calling has been measured to cost a 30-minute manual algebra detour that the solver then confirmed in one call. The solver is the instrument for finding out which lines are good, not a finisher for lines already trusted. It is also the arbiter for structural hypotheses: label the lines per hypothesis and the residuals say which reading of the building is consistent. Inconsistent input returns 'inconsistent' plus the offending line, never a forced number. Verticals parallel in the image are handled as a shifted-lens/cropped frame (principal point on the horizon), not a tilt. Every result ends with a `next` block: what to build next, and whether `unproject` is unlocked \u2014 read it, it is the routing, not decoration.",
       inputSchema: {
         image: external_exports.string().describe("Absolute path to the photograph (png/jpg) \u2014 read for its size"),
         lines: external_exports.array(
@@ -64235,7 +64315,7 @@ function createServer() {
     "score_render",
     {
       title: "Score a render against the reference",
-      description: "Scans render and reference photograph with the SAME silhouette detector and reports edge error, area ratio, tip row, in-silhouette luma and sky gradient. Use the render saved by the viewer's /__save-render endpoint (exact drawing-buffer size \u2014 never a screenshot, they rescale). Note the endpoint already scores each save automatically and returns the silhouette numbers \u2014 this tool adds the luma/sky detail on top. Score EVERY pass, log it in RECON.md, fix the largest error first. Identity features are not covered: target them separately.",
+      description: "Scans render and reference photograph with the SAME silhouette detector and reports edge error, area ratio, tip row, in-silhouette luma and sky gradient. Use the render saved by the viewer's /__save-render endpoint (exact drawing-buffer size \u2014 never a screenshot, they rescale). Note the endpoint already scores each save automatically and returns the silhouette numbers \u2014 this tool adds the luma/sky detail on top. Score EVERY pass, log it in RECON.md, fix the largest error first. Identity features are not covered: target them separately. The skyline block also localises the error: `worst_segments` names the worst contiguous column ranges and which way each is wrong ('x 1180-1400, render skyline too HIGH'), so you can go straight to the element that spans them instead of re-reading the whole overlay.",
       inputSchema: {
         render: external_exports.string().describe("Absolute path to the render png"),
         reference: external_exports.string().describe("Absolute path to the reference photograph")

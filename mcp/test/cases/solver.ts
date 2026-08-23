@@ -74,3 +74,30 @@ const say = (n: string, cond: boolean, d = "") => console.log(`${n} | ${cond ? "
   say("tilted tower: shifted-lens branch does NOT fire", srcT.startsWith("assumed"), srcT.slice(0, 40));
   say("tilted tower: tilt preserved", Math.abs(rt.pose.tilt_above_horizontal_deg - 18) < 0.5, `got ${rt.pose.tilt_above_horizontal_deg}`);
 }
+
+// 4. The routing block: the result must carry what to do next (v0.5.2).
+//    Both rules it carries — massing before detail, and "unproject is locked" —
+//    lived in skill prose for three runs and were skipped in all three.
+{
+  const { W, H, lines } = synth(12);
+  const r: any = solveCamera([W, H], lines, { height_m: 14 });
+  say("usable solve carries a next block", Array.isArray(r.next?.do) && r.next.do.length > 0);
+  say("usable solve routes to MASSING before detail",
+      /MASSING/.test(r.next.do.join(" ")) && /do NOT measure/i.test(r.next.do.join(" ")),
+      r.next?.do?.[0]?.slice(0, 50));
+  say("usable solve with verticals reports unproject UNLOCKED",
+      r.next.unproject_locked === false && r.camera_for_unproject !== null,
+      `locked=${r.next?.unproject_locked}`);
+
+  // Run 5 supplied ONE vertical line, so no vertical family formed, so
+  // camera_for_unproject came back null — and nothing said so.
+  const oneVertical = [...lines.filter((l) => l.label !== "vertical"), lines.find((l) => l.label === "vertical")!];
+  const r2: any = solveCamera([W, H], oneVertical, {});
+  const locked = r2.camera_for_unproject === null;
+  say("one vertical line: unproject is reported LOCKED, loudly and first",
+      !locked || (r2.next.unproject_locked === true && /unproject is LOCKED/.test(r2.next.do[0])),
+      locked ? r2.next?.do?.[0]?.slice(0, 60) : "camera_for_unproject was not null (guard n/a)");
+  say("locked warning names how many verticals were supplied",
+      !locked || /vertical line\(s\) supplied/.test(r2.next.do[0]) === true,
+      `vertical_lines=${r2.next?.vertical_lines}`);
+}

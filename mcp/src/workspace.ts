@@ -104,7 +104,17 @@ export const ${id}: BuildingModel = {
   },
   // PLACEHOLDERS — measure before scoring (a converged score against invented
   // targets is checklist item 13's false-100% trap, deliberately).
-  targets: { litLuma: 128, shadowLuma: 96, ratio: 1.33, widthFrac: 0.5 },
+  targets: {
+    litLuma: 128, shadowLuma: 96, ratio: 1.33, widthFrac: 0.5,
+    // The subject's column extent in the REFERENCE photograph, in original
+    // image pixels. Set it as soon as you know it (the massing pass is the
+    // natural moment) and every scored save from then on carries an extra
+    // subject-band block — the flanks of a real photograph measure trees and
+    // neighbours, not the building, and a field run read 487/585 px flanks
+    // against a 107 px middle before hand-building its own scoped checker.
+    // Nothing else to remember: the render trigger forwards this for you.
+    span: null, // e.g. { x0: 210, x1: 1780 }
+  },
 };
 `;
 

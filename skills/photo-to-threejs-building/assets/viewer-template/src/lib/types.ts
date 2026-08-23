@@ -26,6 +26,14 @@ export type ReferenceTargets = {
   shadowLuma: number;
   ratio: number;
   widthFrac: number;
+  /**
+   * The subject's column extent in the reference photograph, in ORIGINAL image
+   * pixels. Set it once, after measuring, and every scored save reports an extra
+   * subject-band block alongside the full-frame numbers — the flanks of a real
+   * photograph usually measure trees and neighbours, not the building.
+   * The render trigger forwards this automatically; nobody has to remember it.
+   */
+  span?: { x0: number; x1: number } | null;
   /** Optional extra checks a specific building cares about. */
   notes?: Record<string, number>;
 };

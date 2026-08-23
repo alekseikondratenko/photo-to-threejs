@@ -34,6 +34,14 @@ back empty or the silhouette is visibly picking up skyline and foreground rather
 subject. A badly aimed crop is reported as a failed detection, never as a fabricated
 measurement — but it is still a wasted pass.
 
+**No unions in MCP input schemas.** The SDK's schema conversion collapses a
+`z.union` to an untyped field, and a model facing an untyped field guesses — v0.5.1
+shipped a union for `view_crop`'s `crop` and a field agent produced six different
+JSON-string spellings, collected six validation errors, and rebuilt its own crop script
+in Python. The house pattern is a loose schema plus normalisation in the handler:
+`normalizeCrops` accepts every shape that was ever sent and the six field spellings are
+regression cases.
+
 Plus the method itself as an MCP prompt: `reconstruct_from_photo` ships the full
 SKILL.md, wired to prefer these tools over hand-written scanners.
 

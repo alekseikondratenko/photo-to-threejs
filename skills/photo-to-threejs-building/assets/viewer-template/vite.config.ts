@@ -1,6 +1,11 @@
 import { defineConfig, type Plugin } from 'vite';
 import fs from 'node:fs';
 import path from 'node:path';
+// @ts-expect-error — plain .mjs, shared with the regression suite
+import { GateState } from './scripts/gate-state.mjs';
+
+/** One per dev server: pass history, deltas, and the converged verdict. */
+const gate = new GateState();
 
 /**
  * POST /__save-render  {name, dataUrl, reference?}
@@ -71,22 +76,26 @@ function saveRender(): Plugin {
                     saved: `renders/${safe}`,
                     scored: false,
                     warning:
-                      'RENDER IS UNIFORM (blank/black) — nothing was scored. The page is ' +
-                      'erroring, or the canvas was read before a frame painted (bug ' +
-                      'checklist #9: needs preserveDrawingBuffer and a painted frame). ' +
-                      'Check the browser console, fix, then re-save.',
+                      'RENDER IS UNIFORM (blank/black) — nothing was scored. THE SCORING ' +
+                      'PIPELINE IS HEALTHY; the PAGE produced a black frame. Do not debug ' +
+                      'the scorer or read its source — read the BROWSER CONSOLE for the ' +
+                      'exception. The page is erroring, or the canvas was read before a ' +
+                      'frame painted (bug checklist #9: needs preserveDrawingBuffer and a ' +
+                      'painted frame). Fix the page, then re-save.',
                   };
                 } else {
                   const silhouette = scoreImages(renderPath, refPath, span);
-                  const prev = lastScores.get(safe.replace(/\d+/g, '#'));
-                  const delta = prev ? deltaOf(prev, silhouette) : null;
-                  lastScores.set(safe.replace(/\d+/g, '#'), silhouette);
+                  // Deltas, the unchanged-re-save note and the converged verdict
+                  // all come from the gate's own memory — see scripts/gate-state.mjs
+                  // for why each of the three exists.
+                  const extras = gate.record(safe, silhouette);
+                  const delta = (extras as { delta_vs_previous?: unknown }).delta_vs_previous ?? null;
                   payload = {
                     saved: `renders/${safe}`,
                     scored: true,
                     reference: path.relative(root, refPath),
                     silhouette,
-                    ...(delta ? { delta_vs_previous: delta } : {}),
+                    ...extras,
                   };
                   fs.writeFileSync(`${renderPath}.score.json`, JSON.stringify(payload, null, 2));
                   appendReconRow(root, safe, silhouette);
@@ -94,7 +103,8 @@ function saveRender(): Plugin {
                   server.config.logger.info(
                     `[score] ${safe}: skyline ${sk ? sk.mean_top_error_px : 'n/a'} px, ` +
                     `row-edge ${silhouette.mean_edge_error_px} px, area ${silhouette.area_ratio}` +
-                    (delta ? ` | Δ ${JSON.stringify(delta)}` : ''),
+                    (delta ? ` | Δ ${JSON.stringify(delta)}` : '') +
+                    ((extras as { converged?: unknown }).converged ? ' | CONVERGED — geometry has not moved in 2 passes' : ''),
                   );
                 }
               }
@@ -111,26 +121,7 @@ function saveRender(): Plugin {
   };
 }
 
-/** Previous score per render-name shape ("pass3.png" -> "pass#.png"), for deltas. */
-const lastScores = new Map<string, Record<string, unknown>>();
 
-/** What moved since the previous pass — so nobody re-opens old score files. */
-function deltaOf(prev: any, now: any): Record<string, number> | null {
-  const out: Record<string, number> = {};
-  const pick = (o: any) => ({
-    skyline_mean: o?.skyline?.mean_top_error_px,
-    skyline_middle: o?.skyline?.top_error_by_band?.middle,
-    row_edge_mean: o?.mean_edge_error_px,
-    lit_shadow_ratio: o?.luma?.bands?.render?.lit_over_shadow_ratio,
-  });
-  const a = pick(prev), b = pick(now);
-  for (const k of Object.keys(a) as (keyof typeof a)[]) {
-    if (typeof a[k] === 'number' && typeof b[k] === 'number') {
-      out[k] = Math.round(((b[k] as number) - (a[k] as number)) * 100) / 100;
-    }
-  }
-  return Object.keys(out).length ? out : null;
-}
 
 /**
  * Append the pass to RECON.md's Score history. Both field runs left that table

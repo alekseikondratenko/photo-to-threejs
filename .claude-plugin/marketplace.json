@@ -5,7 +5,7 @@
   },
   "metadata": {
     "description": "Rebuild a building from one photograph as a procedural, measured Three.js model",
-    "version": "0.5.1"
+    "version": "0.5.2"
   },
   "plugins": [
     {

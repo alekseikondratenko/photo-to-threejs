@@ -657,8 +657,56 @@ export function solveCamera(
     );
   }
 
+  // ---- Routing block. Two rules decayed in three consecutive field runs —
+  // "massing before detail" and "unlock unproject by supplying verticals" — and
+  // both lived in skill prose. Tool RESULTS are read on every call; prose is not.
+  // So the instruction ships in the result, next to the numbers it depends on.
+  // Count what was SUPPLIED, not what survived: a family of one line is
+  // dropped before it becomes a Family, and "0 verticals" would be a lie to an
+  // agent that supplied one. Run 5 supplied exactly one.
+  const verticalCount = labelled.filter((s) => s.label.toLowerCase().startsWith("vert")).length;
+  const unprojectReady = Boolean(focal && up);
+  const nextSteps: string[] = [];
+  if (!unprojectReady) {
+    // First, and loud: this is the single largest saving the server offers and
+    // run 5 never engaged it, because nothing said it was off.
+    nextSteps.push(
+      `WARNING: unproject is LOCKED — no usable vertical family was formed (${verticalCount} ` +
+      "vertical line(s) supplied; 2–3 are needed: window jambs, building corners, downpipes, " +
+      "labelled 'vertical'). One more solve_camera call with those lines unlocks " +
+      "world-coordinate feature placement, which replaces per-feature pixel measurement " +
+      "outright — a field run spent ~25 minutes measuring what unproject returns in one call.",
+    );
+  }
+  if (verdict === "usable") {
+    nextSteps.push(
+      "Build the MASSING now (footprint, eave, ridge, wings) and score it. Do NOT measure " +
+      "windows, doors or trim until the massing has scored — a feature measured against an " +
+      "unverified frame goes stale the moment the frame moves. After the massing scores, get " +
+      "feature positions with unproject, not with per-feature crops.",
+    );
+  } else if (verdict === "weak") {
+    nextSteps.push(
+      "Re-pick one line before building: " +
+      (culprit ? `${culprit} — replace it ` : "replace the worst line named in cross_check.worst_line ") +
+      "with the longest, cleanest run of that family you can see, then solve again. Re-picking " +
+      "is minutes; the geometry a weak fit distorts costs hours.",
+    );
+  } else {
+    nextSteps.push(
+      "Do not build on this solve — it is inconsistent (see `inconsistent`). Fix the picking " +
+      "first: longest runs, spread apart, endpoints on features you can actually see. Derived " +
+      "quantities are withheld deliberately; do not reconstruct them by hand.",
+    );
+  }
+
   return {
     size: [W, H],
+    /**
+     * What to do with this result. Verdict-conditional and ordered, most
+     * urgent first — the routing that used to live in skill prose.
+     */
+    next: { unproject_locked: !unprojectReady, vertical_lines: verticalCount, do: nextSteps },
     families: families.map((f) => ({
       label: f.label,
       lines: f.count,

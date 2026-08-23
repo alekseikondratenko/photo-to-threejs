@@ -103,7 +103,7 @@ const CROP = z
   );
 
 export function createServer(): McpServer {
-  const server = new McpServer({ name: "photo-to-threejs", version: "0.5.1" });
+  const server = new McpServer({ name: "photo-to-threejs", version: "0.5.2" });
 
   server.registerTool(
     "classify_reference",
@@ -290,7 +290,9 @@ export function createServer(): McpServer {
         "hypothesis and the residuals say which reading of the building is consistent. " +
         "Inconsistent input returns 'inconsistent' plus the offending line, never a forced " +
         "number. Verticals parallel in the image are handled as a shifted-lens/cropped " +
-        "frame (principal point on the horizon), not a tilt.",
+        "frame (principal point on the horizon), not a tilt. Every result ends with a " +
+        "`next` block: what to build next, and whether `unproject` is unlocked — read it, " +
+        "it is the routing, not decoration.",
       inputSchema: {
         image: z.string().describe("Absolute path to the photograph (png/jpg) — read for its size"),
         lines: z
@@ -466,7 +468,10 @@ export function createServer(): McpServer {
         "screenshot, they rescale). Note the endpoint already scores each save automatically " +
         "and returns the silhouette numbers — this tool adds the luma/sky detail on top. " +
         "Score EVERY pass, log it in RECON.md, fix the largest error first. Identity " +
-        "features are not covered: target them separately.",
+        "features are not covered: target them separately. The skyline block also localises " +
+        "the error: `worst_segments` names the worst contiguous column ranges and which way " +
+        "each is wrong ('x 1180-1400, render skyline too HIGH'), so you can go straight to " +
+        "the element that spans them instead of re-reading the whole overlay.",
       inputSchema: {
         render: z.string().describe("Absolute path to the render png"),
         reference: z.string().describe("Absolute path to the reference photograph"),

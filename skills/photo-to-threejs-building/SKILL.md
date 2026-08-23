@@ -20,7 +20,14 @@ by hand otherwise) and **rewrite it at every step**:
   dead** — re-litigating settled questions cost one observed run three separate
   re-investigations of the same roof step.
 - **Camera** — the accepted solve, pasted verbatim.
-- **Score history** — one row per scored render pass.
+- **Score history** — one row per scored render pass. **The gate writes these rows for
+  you** on every scored save; your job is the last column (what you changed) and the
+  four sections above it.
+
+After every solve or measurement burst, move the numbers you now trust into **Verified**
+with their evidence, before the next burst. An observed run kept everything in context
+and wrote nothing — which works right up until it doesn't, and the ledger is also what
+you hand over at the end.
 
 Read it before re-deriving anything: a fact not recorded here WILL be re-measured, and
 that re-measurement will not agree pixel-for-pixel with the first one, and reconciling
@@ -36,18 +43,35 @@ The whole method is one loop, and each pass has the same grammar:
 3. **Read the grade** — the save response carries the score (the endpoint scores every
    save automatically; there is no unscored render). Log it in Score history.
 4. **Fix the largest measured error — and every independent smaller fix — in the SAME
-   pass.** Passes are expensive (3–5 minutes each: edit, render, score, look); edits are
+   pass.** The score locates it for you: `skyline.worst_segments` gives the worst
+   contiguous column ranges with a direction ("x 1180-1400, render skyline 42 px too
+   HIGH"). You measured those columns; look up which element lives there and fix that,
+   rather than re-reading the whole overlay to decide.
+    Passes are expensive (3–5 minutes each: edit, render, score, look); edits are
    cheap. A gutter colour, a tree position and a window reveal do not interact, so they
    do not each deserve their own pass. One field run spent 21 passes fixing roughly one
    thing at a time.
 5. **One eye pass per numeric pass.**
 
-**Stop rules — converged is a number, not a feeling.** A metric that has improved by
-less than **0.5% of the image diagonal** over the last two passes is converged: stop
-optimising it and move to the next phase. Soft budget: **~12 scored passes** for a
-building-scale subject; going beyond is allowed but write one line in RECON.md saying
-what is still moving and why. Never iterate on eyeballed screenshots — an observed run
-scored once, eyeballed for an hour, and did not converge.
+**Stop rules — the gate says when, not you.** The save response now carries the stop
+signal itself: when no geometry metric has moved by even 3% of its own value across two
+passes, the gate returns a `converged` block with one of two verdicts, and they mean
+opposite things:
+
+- **`converged`** — not moving, and the error is inside the delivery floor (1% of the
+  image diagonal). Stop optimising. Go to the finish checks and delivery.
+- **`stalled`** — not moving, and the error is still large. More passes of the same kind
+  will not close it. A residual that survives two tuning passes is *structural*: read
+  `skyline.worst_segments`, find which element spans those columns, and re-MEASURE it
+  (`unproject`, `view_crop`) instead of re-tuning numbers.
+
+Read that block before deciding to take another pass. Soft budget: **~8 scored passes**
+for a building-scale subject — a backstop, not the operative stop; going beyond is
+allowed but write one line in RECON.md saying what is still moving and why. This number
+is deliberately lower than it used to be: an observed run stopped at *exactly* its
+budget of 12 after four passes that moved the score by 2 px in total, which means the
+budget was doing the stopping and the plateau rule was not. Never iterate on eyeballed
+screenshots — an observed run scored once, eyeballed for an hour, and did not converge.
 
 There is no reconstruction algorithm here and no ML. The 3D comes from you writing
 TypeScript that composes primitives and swept paths. What makes it reliable is not
@@ -286,6 +310,11 @@ image points into world coordinates directly, which is faster than pixel-measuri
 each feature was in the first place.
 
 ## Step 3 gate — massing before detail, always
+
+`solve_camera` carries this instruction in its own result, in the `next` block, together
+with whether `unproject` is unlocked. **Read it — it is the operative version of this
+section.** If it says unproject is LOCKED, supply 2-3 vertical lines and solve again
+before measuring anything: unlocking it replaces per-feature pixel measurement outright.
 
 Block out the ENTIRE building as plain massing first — every visible face, the roof
 planes, the big moves only — and score it against the photograph (Step 4) before adding

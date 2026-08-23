@@ -179,3 +179,80 @@ six rejections). Loose schema + handler normalisation is the house pattern
    Bar: ≤60 min, unproject actually used, massing before detail (the `next` block's
    test), subject-band span reported on every save.
 3. Burj generality run afterwards, unchanged from the 0.5.1 plan.
+
+---
+
+## Implementation record — shipped 2026-08-23
+
+All of A1, A1b, A1c, A2, A3, A4, A4b, B and C are implemented. Two things changed
+against the plan as written, both because the evidence said so once the code existed:
+
+**1. The stop rule is relative, not absolute — and it has TWO verdicts.** The plan's
+literal rule ("delta < 0.5% of the image diagonal over two passes") is wrong as a stop
+signal: on a 2200 px diagonal that is an 11 px threshold, so two honest 8 px
+improvements against a 150 px error would have been declared converged while the render
+was still visibly wrong. The shipped rule asks whether a pass BUYS anything, which is
+relative: a metric that moves less than 3% of its own value, twice running, is not being
+improved by the kind of pass being taken. The 0.5%-of-diagonal number was reused where
+it belongs — as an absolute *delivery floor* (1% of the diagonal) that decides WHICH
+verdict is issued:
+
+- `converged` — not moving, error inside the floor → go to the finish checks and deliver.
+- `stalled` — not moving, error still large → **more passes of this kind will not close
+  it**; read `worst_segments`, find the element in those columns, re-MEASURE it.
+
+**2. Replaying run 5's own renders through the new gate reclassified its ending.** The
+twelve saved renders in `mcp-test-5/viewer/renders/` were fed to the new scorer in order.
+The gate's verdict at p12 is **stalled, not converged**: skyline 110.4 px against a
+21.9 px delivery floor, having moved 0.2 px then 0.0 px. So run 5 did not finish early
+because it was done — it stopped because it hit the pass budget while stuck, and the
+run's last hour was spent tuning parameters against a residual that was structural. The
+localiser says where it was structural, and says the same thing on all three of the last
+passes: **x 169–433 off by 228 px (render too LOW)** and **x 919–1115 off by 166 px
+(render too HIGH)** — a whole element wrong in the left third, unchanged across three
+passes that never addressed it. That is the exact failure the two new blocks are built
+to break, and it is now a fixture rather than an anecdote.
+
+**Regression suite: 31 → 54 checks**, all green, including the tower guard. New coverage:
+the solver's `next` block (present, verdict-conditional, unproject-locked warning fires
+and counts the verticals actually supplied), the gate's delta keying (save A / save A /
+save B), both stop verdicts, an unreliable row scan not being allowed to drive a stop,
+identity localising nothing, and a re-save never counting as one of the two passes.
+
+---
+
+## Implementation record — shipped 2026-08-23
+
+All of A1, A1b, A1c, A2, A3, A4, A4b, B and C are implemented. Two things changed
+against the plan as written, both because the evidence said so once the code existed:
+
+**1. The stop rule is relative, not absolute — and it has TWO verdicts.** The plan's
+literal rule ("delta < 0.5% of the image diagonal over two passes") is wrong as a stop
+signal: on a 2200 px diagonal that is an 11 px threshold, so two honest 8 px
+improvements against a 150 px error would have been declared converged while the render
+was still visibly wrong. The shipped rule asks whether a pass BUYS anything, which is
+relative: a metric that moves less than 3% of its own value, twice running, is not being
+improved by the kind of pass being taken. The 0.5%-of-diagonal number was reused where
+it belongs — as an absolute *delivery floor* (1% of the diagonal) that decides WHICH
+verdict is issued:
+
+- `converged` — not moving, error inside the floor → go to the finish checks and deliver.
+- `stalled` — not moving, error still large → **more passes of this kind will not close
+  it**; read `worst_segments`, find the element in those columns, re-MEASURE it.
+
+**2. Replaying run 5's own renders through the new gate reclassified its ending.** The
+saved renders in `mcp-test-5/viewer/renders/` were fed to the new scorer in order. The
+gate's verdict at p12 is **stalled, not converged**: skyline 110.4 px against a 21.9 px
+delivery floor, having moved 0.2 px then 0.0 px. So run 5 did not stop because it was
+done — it stopped because it hit the pass budget while stuck, and its last hour went on
+tuning parameters against a residual that was structural. The localiser says where, and
+says the same thing on all three of the last passes: **x 169–433 off by 228 px (render
+too LOW)** and **x 919–1115 off by 166 px (render too HIGH)** — a whole element wrong in
+the left third, unchanged across three passes that never addressed it. That is the exact
+failure the two new blocks are built to break, and it is now a fixture, not an anecdote.
+
+**Regression suite: 31 → 54 checks**, all green, tower guard included. New coverage: the
+solver's `next` block (present, verdict-conditional, unproject-locked warning fires and
+counts the verticals actually supplied), the gate's delta keying (save A / save A / save
+B), both stop verdicts, an unreliable row scan not being allowed to drive a stop,
+identity localising nothing, and a re-save never counting as one of the two passes.

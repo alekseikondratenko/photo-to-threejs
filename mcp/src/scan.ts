@@ -723,15 +723,84 @@ function skyline(im: Bitmap, tol = 42): number[] {
   return out;
 }
 
+type WorstSegment = {
+  x0: number; x1: number; columns: number; mean_err_px: number; direction: string;
+};
+
+/**
+ * The worst contiguous stretches of skyline, with a direction for each.
+ *
+ * The score says HOW MUCH is wrong; nothing said WHERE. Refinement passes cost
+ * 6-10 minutes each and most of that is LOOKING — opening the evidence pack and
+ * deciding which element is off. The agent already knows which element spans
+ * columns 1180-1400 (it measured them), so a located error turns a judgement
+ * call into a lookup. Mirrored in the workspace gate's scripts/score.mjs —
+ * keep the two in step.
+ *
+ * Signed convention: image y grows DOWNWARD, so a render row SMALLER than the
+ * photograph's means the render's top edge sits HIGHER in the frame.
+ */
+function worstSegments(cols: number[], signed: number[], limit = 3): WorstSegment[] | null {
+  const abs = signed.map((v) => Math.abs(v));
+  // Noise floor: 4 px or 1.5x the median column error, whichever is larger. On
+  // a converged render nothing qualifies and nothing is reported — a located
+  // error that is only noise is worse than silence.
+  const thr = Math.max(4, median(abs) * 1.5);
+  type Run = { x0: number; x1: number; sign: number; errs: number[] };
+  const segs: Run[] = [];
+  let cur: Run | null = null;
+  for (let i = 0; i < cols.length; i++) {
+    if (abs[i] <= thr) continue;
+    const sign = Math.sign(signed[i]);
+    // Bridge small gaps, never a sign flip: two adjacent errors in opposite
+    // directions are two different fixes.
+    if (cur && cols[i] - cur.x1 <= 12 && cur.sign === sign) {
+      cur.errs.push(abs[i]);
+      cur.x1 = cols[i];
+    } else {
+      if (cur) segs.push(cur);
+      cur = { x0: cols[i], x1: cols[i], sign, errs: [abs[i]] };
+    }
+  }
+  if (cur) segs.push(cur);
+  const out = segs
+    .filter((s) => s.errs.length >= 12)
+    .map((s) => {
+      const meanAbs = s.errs.reduce((a, b) => a + b, 0) / s.errs.length;
+      return {
+        seg: {
+          x0: s.x0,
+          x1: s.x1,
+          columns: s.errs.length,
+          mean_err_px: Math.round(meanAbs * 10) / 10,
+          direction:
+            s.sign < 0
+              ? "render skyline too HIGH (render top edge is above the photograph's)"
+              : "render skyline too LOW (render top edge is below the photograph's)",
+        },
+        // Rank by total error mass, not peak: a 300-column band off by 20 px is
+        // a bigger fix than a 15-column spike off by 40.
+        mass: meanAbs * s.errs.length,
+      };
+    })
+    .sort((a, b) => b.mass - a.mass)
+    .slice(0, limit)
+    .map((e) => e.seg);
+  return out.length ? out : null;
+}
+
 function skylineScore(ref: Bitmap, ren: Bitmap) {
   const a = skyline(ref), b = skyline(ren);
   const errs: number[] = [];
+  const signed: number[] = [];
+  const cols: number[] = [];
   for (let x = Math.round(ref.w * 0.03); x < ref.w * 0.97; x++) {
-    if (a[x] >= 0 && b[x] >= 0) errs.push(Math.abs(a[x] - b[x]));
+    if (a[x] >= 0 && b[x] >= 0) { errs.push(Math.abs(a[x] - b[x])); signed.push(b[x] - a[x]); cols.push(x); }
   }
   if (!errs.length) return null;
   const mean = (v: number[]) => (v.length ? Math.round((v.reduce((s, e) => s + e, 0) / v.length) * 10) / 10 : null);
   const third = Math.floor(errs.length / 3);
+  const worst = worstSegments(cols, signed);
   return {
     mean_top_error_px: mean(errs),
     top_error_by_band: {
@@ -741,6 +810,11 @@ function skylineScore(ref: Bitmap, ren: Bitmap) {
     },
     max_top_error_px: Math.max(...errs),
     columns_compared: errs.length,
+    /** WHERE the error is, in original-image columns. Fix the top one first. */
+    worst_segments: worst,
+    ...(worst
+      ? { worst_segments_note: "x0/x1 are image columns. Identify which element spans them (you measured it), fix that element, re-render." }
+      : {}),
   };
 }
 

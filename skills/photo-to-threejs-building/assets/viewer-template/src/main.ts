@@ -222,7 +222,10 @@ if (import.meta.env.DEV) {
             body: JSON.stringify({
               name: job.name,
               dataUrl: canvas.toDataURL('image/png'),
-              span: job.span,
+              // The subject window: whatever the job asked for, else the scene's
+              // measured span. The parameter existed for a whole release and no
+              // run ever passed it, so the scene now carries it for them.
+              span: job.span ?? active.targets.span ?? undefined,
             }),
           });
         }

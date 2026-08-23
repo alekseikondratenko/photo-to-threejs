@@ -34,8 +34,9 @@ const tsx = (file, args = []) =>
 console.log('\n== 1. scorer identity (every photo vs itself: zero error, both axes) ==');
 const idOut = tsx(path.join(HERE, 'cases', 'identity.ts'), Object.values(PHOTOS));
 for (const line of idOut.trim().split('\n')) {
-  const [name, edge, sky, cols] = line.split(/\s+/);
+  const [name, edge, sky, cols, wseg] = line.split(/\s+/);
   ok(`${name}: identity edge=${edge} skyline=${sky} (${cols} cols)`, edge === '0' && sky === '0');
+  ok(`${name}: identity localises nothing (worst_segments null)`, wseg === 'null', `(got ${wseg})`);
 }
 
 console.log('\n== 2. classify sanity + house auto-crop ==');
@@ -63,6 +64,13 @@ for (const line of crOut.trim().split('\n')) {
 console.log('\n== 5. unproject round-trip ==');
 const upOut = tsx(path.join(HERE, 'cases', 'unproject.ts'));
 for (const line of upOut.trim().split('\n')) {
+  const [name, verdict, detail] = line.split('|');
+  ok(name.trim(), verdict.trim() === 'PASS', detail ?? '');
+}
+
+console.log('\n== 6. workspace gate: delta keying + the stop verdict ==');
+const gtOut = tsx(path.join(HERE, 'cases', 'gate.mjs'));
+for (const line of gtOut.trim().split('\n')) {
   const [name, verdict, detail] = line.split('|');
   ok(name.trim(), verdict.trim() === 'PASS', detail ?? '');
 }
