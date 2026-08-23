@@ -53,7 +53,14 @@ for (const line of svOut.trim().split('\n')) {
   ok(name.trim(), verdict.trim() === 'PASS', detail ?? '');
 }
 
-console.log('\n== 4. unproject round-trip ==');
+console.log('\n== 4. crop normalisation (the six field shapes) ==');
+const crOut = tsx(path.join(HERE, 'cases', 'crops.ts'));
+for (const line of crOut.trim().split('\n')) {
+  const [name, verdict, detail] = line.split('|');
+  ok(name.trim(), verdict.trim() === 'PASS', detail ?? '');
+}
+
+console.log('\n== 5. unproject round-trip ==');
 const upOut = tsx(path.join(HERE, 'cases', 'unproject.ts'));
 for (const line of upOut.trim().split('\n')) {
   const [name, verdict, detail] = line.split('|');

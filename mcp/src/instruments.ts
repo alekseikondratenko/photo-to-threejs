@@ -324,3 +324,51 @@ export function traceEdge(
       "outliers are survivable — but check residual_max_px before trusting the segment.",
   };
 }
+
+/**
+ * Normalise however the caller spelled the crop(s).
+ *
+ * The v0.5.1 contact sheet made `crop` a schema union (object OR array), and
+ * the MCP SDK's zod→JSON-schema conversion collapsed that union into an
+ * untyped field — the model saw no type information, sent the value as a JSON
+ * STRING, and server-side validation rejected six consecutive attempts in
+ * every shape the agent could think of. It then, entirely reasonably, wrote
+ * crop.py again. Lesson: no unions in MCP input schemas; be liberal in the
+ * handler instead. This accepts an object, an array, {x,y,w,h}, and the
+ * JSON-stringified form of any of them.
+ */
+export function normalizeCrops(raw: unknown): Crop[] {
+  let v = raw;
+  if (typeof v === "string") {
+    const raw0 = v;
+    try { v = JSON.parse(v); } catch {
+      throw new Error(`crop is a string but not valid JSON: ${raw0.slice(0, 80)}`);
+    }
+  }
+  const one = (o: unknown): Crop => {
+    if (Array.isArray(o) && o.length === 4 && o.every((n) => typeof n === "number")) {
+      return { x0: o[0], y0: o[1], x1: o[2], y1: o[3] };
+    }
+    const r = o as Record<string, number>;
+    if (typeof r?.x0 === "number" && typeof r?.y0 === "number" && typeof r?.x1 === "number" && typeof r?.y1 === "number") {
+      return { x0: r.x0, y0: r.y0, x1: r.x1, y1: r.y1 };
+    }
+    if (typeof r?.x === "number" && typeof r?.y === "number" && typeof r?.w === "number" && typeof r?.h === "number") {
+      return { x0: r.x, y0: r.y, x1: r.x + r.w, y1: r.y + r.h };
+    }
+    throw new Error(
+      `unrecognised crop shape: ${JSON.stringify(o).slice(0, 100)} — use {x0,y0,x1,y1}, ` +
+      "[x0,y0,x1,y1], or an array of those for a contact sheet",
+    );
+  };
+  if (Array.isArray(v)) {
+    if (v.length === 4 && v.every((n) => typeof n === "number")) return [one(v)];
+    return (v as unknown[]).map(one);
+  }
+  if (v && typeof v === "object") {
+    const r = v as Record<string, unknown>;
+    if (Array.isArray(r.regions)) return (r.regions as unknown[]).map(one); // one field shape actually tried
+    return [one(v)];
+  }
+  throw new Error("crop is required: {x0,y0,x1,y1} or an array of them");
+}

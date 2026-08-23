@@ -63690,6 +63690,42 @@ function traceEdge(image, crop, direction, opts = {}) {
     notes: "Points are in ORIGINAL image pixels. The fit is Theil\u2013Sen (median), so a few outliers are survivable \u2014 but check residual_max_px before trusting the segment."
   };
 }
+function normalizeCrops(raw) {
+  let v2 = raw;
+  if (typeof v2 === "string") {
+    const raw0 = v2;
+    try {
+      v2 = JSON.parse(v2);
+    } catch {
+      throw new Error(`crop is a string but not valid JSON: ${raw0.slice(0, 80)}`);
+    }
+  }
+  const one = (o) => {
+    if (Array.isArray(o) && o.length === 4 && o.every((n) => typeof n === "number")) {
+      return { x0: o[0], y0: o[1], x1: o[2], y1: o[3] };
+    }
+    const r3 = o;
+    if (typeof r3?.x0 === "number" && typeof r3?.y0 === "number" && typeof r3?.x1 === "number" && typeof r3?.y1 === "number") {
+      return { x0: r3.x0, y0: r3.y0, x1: r3.x1, y1: r3.y1 };
+    }
+    if (typeof r3?.x === "number" && typeof r3?.y === "number" && typeof r3?.w === "number" && typeof r3?.h === "number") {
+      return { x0: r3.x, y0: r3.y, x1: r3.x + r3.w, y1: r3.y + r3.h };
+    }
+    throw new Error(
+      `unrecognised crop shape: ${JSON.stringify(o).slice(0, 100)} \u2014 use {x0,y0,x1,y1}, [x0,y0,x1,y1], or an array of those for a contact sheet`
+    );
+  };
+  if (Array.isArray(v2)) {
+    if (v2.length === 4 && v2.every((n) => typeof n === "number")) return [one(v2)];
+    return v2.map(one);
+  }
+  if (v2 && typeof v2 === "object") {
+    const r3 = v2;
+    if (Array.isArray(r3.regions)) return r3.regions.map(one);
+    return [one(v2)];
+  }
+  throw new Error("crop is required: {x0,y0,x1,y1} or an array of them");
+}
 
 // src/protocol.ts
 var BUNDLE_META = "io.aecfoundry.photo-to-threejs/viewer-bundle";
@@ -64032,11 +64068,12 @@ function createServer() {
       description: "Writes a PNG of the crop, upscaled, with a labelled pixel grid burned in (magenta = x, cyan = y, labels in ORIGINAL image coordinates). Use it whenever you need to LOOK at a detail and read positions off what you see \u2014 junctions, eave lines, window corners. Every observed run hand-built exactly this (crop.py + PIL); this version needs no Python and no dependency check. Read the output image with your normal image reading.",
       inputSchema: {
         image: external_exports.string().describe("Absolute path to the photograph (png/jpg)"),
-        crop: external_exports.union([
-          external_exports.object({ x0: external_exports.number(), y0: external_exports.number(), x1: external_exports.number(), y1: external_exports.number() }),
-          external_exports.array(external_exports.object({ x0: external_exports.number(), y0: external_exports.number(), x1: external_exports.number(), y1: external_exports.number() })).min(1).max(6)
-        ]).describe(
-          "One region, or an ARRAY of up to 6 regions for a contact sheet (all tiles in one image, each numbered and separately gridded). Prefer the array whenever you want to look at several places \u2014 one call instead of six round-trips."
+        // Deliberately NOT a union: the SDK's schema conversion collapses
+        // unions into an untyped field, the model then guesses (a field run
+        // sent strings six times), and validation rejects every guess. Loose
+        // schema, strict-but-liberal normalisation in the handler.
+        crop: external_exports.any().describe(
+          "One region {x0,y0,x1,y1} in ORIGINAL image pixels, or an ARRAY of up to 6 such regions for a contact sheet (all tiles in one image, each numbered and separately gridded \u2014 one call instead of six round-trips)."
         ),
         out: external_exports.string().describe("Absolute path for the output PNG"),
         scale: external_exports.number().optional().describe("Upscale factor (default: sized to ~1400 px output)"),
@@ -64045,7 +64082,8 @@ function createServer() {
     },
     async ({ image, crop, out, scale, grid }) => {
       logHandshake("tools/call", { tool: "view_crop", image, crop, out });
-      const result = Array.isArray(crop) ? viewCropSheet(image, crop, out, { scale, grid }) : viewCrop(image, crop, out, { scale, grid });
+      const crops = normalizeCrops(crop);
+      const result = crops.length > 1 ? viewCropSheet(image, crops, out, { scale, grid }) : viewCrop(image, crops[0], out, { scale, grid });
       return {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         structuredContent: result

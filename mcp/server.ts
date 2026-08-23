@@ -28,7 +28,7 @@ import { z } from "zod";
 import { logHandshake } from "./log.ts";
 import { inlineViewer } from "./src/bundle.ts";
 import { solveCamera, unprojectPoints } from "./src/camera.ts";
-import { traceEdge, viewCrop, viewCropSheet } from "./src/instruments.ts";
+import { normalizeCrops, traceEdge, viewCrop, viewCropSheet } from "./src/instruments.ts";
 import { BUNDLE_META } from "./src/protocol.ts";
 import {
   classifyReference,
@@ -206,15 +206,16 @@ export function createServer(): McpServer {
         "output image with your normal image reading.",
       inputSchema: {
         image: z.string().describe("Absolute path to the photograph (png/jpg)"),
+        // Deliberately NOT a union: the SDK's schema conversion collapses
+        // unions into an untyped field, the model then guesses (a field run
+        // sent strings six times), and validation rejects every guess. Loose
+        // schema, strict-but-liberal normalisation in the handler.
         crop: z
-          .union([
-            z.object({ x0: z.number(), y0: z.number(), x1: z.number(), y1: z.number() }),
-            z.array(z.object({ x0: z.number(), y0: z.number(), x1: z.number(), y1: z.number() })).min(1).max(6),
-          ])
+          .any()
           .describe(
-            "One region, or an ARRAY of up to 6 regions for a contact sheet (all tiles in " +
-            "one image, each numbered and separately gridded). Prefer the array whenever " +
-            "you want to look at several places — one call instead of six round-trips.",
+            "One region {x0,y0,x1,y1} in ORIGINAL image pixels, or an ARRAY of up to 6 " +
+            "such regions for a contact sheet (all tiles in one image, each numbered and " +
+            "separately gridded — one call instead of six round-trips).",
           ),
         out: z.string().describe("Absolute path for the output PNG"),
         scale: z.number().optional().describe("Upscale factor (default: sized to ~1400 px output)"),
@@ -223,9 +224,10 @@ export function createServer(): McpServer {
     },
     async ({ image, crop, out, scale, grid }) => {
       logHandshake("tools/call", { tool: "view_crop", image, crop, out });
-      const result = Array.isArray(crop)
-        ? viewCropSheet(image, crop, out, { scale, grid })
-        : viewCrop(image, crop, out, { scale, grid });
+      const crops = normalizeCrops(crop);
+      const result = crops.length > 1
+        ? viewCropSheet(image, crops, out, { scale, grid })
+        : viewCrop(image, crops[0], out, { scale, grid });
       return {
         content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
         structuredContent: result as unknown as Record<string, unknown>,
