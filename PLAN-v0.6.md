@@ -111,3 +111,17 @@ target (the IFC target gets C2 instead — same class of check, format-native).
    helper fails here loudly. THIS IS THE ANTI-OVERFIT GATE; nothing ships without it.
 3. Web-target regression: `npm test` all green (54 checks), one Three.js smoke run to
    confirm the renamed repo + profiles broke nothing.
+
+---
+
+## Execution note (2026-09-10)
+
+Part A was executed in the NEW-REPO shape after reconsideration: a clean public
+repo beats a renamed mixed-history one for a single-story product. Shipped as
+https://github.com/alekseikondratenko/photo-to-bim (0.6.0): instruments +
+profiles + camera_for_blender + unconditional routing + geometric vertical
+detection + worst_segments floor fix in the shared server; the
+photo-to-ifc-building skill with general-shape ifc_helpers (headless-tested,
+house AND tower cases) and photostudio (scorer parity verified against run-6
+renders); IFC delivery gate; 46-check suite. This repo is frozen as the
+Three.js laboratory and field archive — README banner added.

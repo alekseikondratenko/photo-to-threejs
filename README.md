@@ -1,3 +1,10 @@
+> **⚑ This project graduated.** The method, the measurement instruments and the
+> scoring gates developed here now live in
+> **[photo-to-bim](https://github.com/alekseikondratenko/photo-to-bim)** — one
+> photograph in, a measured IFC/BIM model out, authored in Blender through
+> Bonsai. This repo remains as the Three.js laboratory and the field-run
+> archive; active development continues in photo-to-bim.
+
 # photo → three.js
 
 Rebuild a building from **one photograph** as a procedural, measured Three.js model — and
