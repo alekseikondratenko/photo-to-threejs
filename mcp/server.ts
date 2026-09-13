@@ -103,7 +103,7 @@ const CROP = z
   );
 
 export function createServer(): McpServer {
-  const server = new McpServer({ name: "photo-to-threejs", version: "0.5.2" });
+  const server = new McpServer({ name: "photo-to-threejs", version: "1.0.0" });
 
   server.registerTool(
     "classify_reference",

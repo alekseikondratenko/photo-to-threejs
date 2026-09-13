@@ -18,9 +18,17 @@ const PHOTOS = {
   empirestate: `${REPO}/viewer/public/reference-empirestate.jpg`,
   taipei101: `${REPO}/viewer/public/reference-taipei101.jpg`,
   whitehouse: `${REPO}/viewer/public/reference-whitehouse.jpg`,
+};
+// Optional local fixtures from the original field runs (developer machines
+// only — the suite SKIPs them when absent so a fresh clone stays green).
+const OPTIONAL_PHOTOS = {
   burj: '/Users/alexbest/Desktop/skill-test/p3050792a.jpg',
   house: '/Users/alexbest/Desktop/mcp-test-3/house.jpg',
 };
+for (const [k, p] of Object.entries(OPTIONAL_PHOTOS)) {
+  if (fs.existsSync(p)) PHOTOS[k] = p;
+  else console.log(`  SKIP  optional fixture '${k}' not present on this machine`);
+}
 
 let pass = 0, fail = 0;
 const ok = (name, cond, detail = '') => {

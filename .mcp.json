@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "photo-to-threejs": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/dist/server.mjs", "--stdio"],
+      "type": "stdio"
+    }
+  }
+}

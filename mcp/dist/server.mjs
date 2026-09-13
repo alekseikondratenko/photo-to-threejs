@@ -64080,7 +64080,7 @@ var CROP = external_exports.object({
   "Region to scan, in original-image pixels. Use it when foreground clutter (trees, crowds, a tight crop) reaches the frame margins and the sky-bounded detectors report few or no usable rows. Reported coordinates come back in full-image space so they stay comparable across crops."
 );
 function createServer() {
-  const server = new McpServer({ name: "photo-to-threejs", version: "0.5.2" });
+  const server = new McpServer({ name: "photo-to-threejs", version: "1.0.0" });
   server.registerTool(
     "classify_reference",
     {

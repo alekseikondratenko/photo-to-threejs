@@ -1,0 +1,22 @@
+{
+  "name": "photo-to-threejs-building",
+  "version": "1.0.0",
+  "description": "Rebuild a building from one photograph as a procedural, measured Three.js model with pixel-scored validation.",
+  "author": {
+    "name": "Aleksei Kondratenko"
+  },
+  "repository": "https://github.com/alekseikondratenko/photo-to-threejs",
+  "license": "Apache-2.0",
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Photo to Three.js",
+    "shortDescription": "Photo-guided Three.js reconstruction",
+    "capabilities": ["Read", "Write"],
+    "developerName": "Aleksei Kondratenko",
+    "category": "Developer Tools",
+    "defaultPrompt": [
+      "Reconstruct the building in this photograph as a measured Three.js model."
+    ]
+  }
+}

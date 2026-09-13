@@ -1,146 +1,108 @@
-> **⚑ This project graduated.** The method, the measurement instruments and the
-> scoring gates developed here now live in
-> **[photo-to-bim](https://github.com/alekseikondratenko/photo-to-bim)** — one
-> photograph in, a measured IFC/BIM model out, authored in Blender through
-> Bonsai. This repo remains as the Three.js laboratory and the field-run
-> archive; active development continues in photo-to-bim.
+# Photo to Three.js
 
-# photo → three.js
+Turn one building photograph into a procedural, measured **Three.js model** —
+and prove how close it got, in numbers, against the photograph's own pixels.
+Using Codex or Claude Code; no Blender or CAD software required.
 
-Rebuild a building from **one photograph** as a procedural, measured Three.js model — and
-then prove how close it got, in numbers, against the photograph's own pixels.
+| Reference photograph | Reconstruction |
+| --- | --- |
+| ![Empire State reference](docs/examples/empire-state/reference.jpg) | ![Empire State reconstruction](docs/examples/empire-state/render-ref.png) |
 
-| Photograph | Reconstruction |
-|---|---|
-| ![reference](docs/examples/empire-state/reference.jpg) | ![render](docs/examples/empire-state/render-ref.png) |
+[More examples and their evidence](docs/examples/) · Reference image credits in
+[NOTICE](NOTICE) and [docs/LICENSING.md](docs/LICENSING.md).
 
-There is no photogrammetry here and no neural network. An agent reads the photograph,
-measures it, writes TypeScript that builds the geometry, renders it, scores the render
-against the photograph, and iterates. This repository is the method, the viewer, the three
-models it has produced, and the measurements.
+There is no photogrammetry here and no neural network. An agent reads the
+photograph, measures it with deterministic instruments, writes TypeScript that
+builds the geometry, renders it, scores the render against the photograph, and
+iterates.
 
----
+## Use it
 
-## Two ways to use this
+**For each building:**
 
-### The skill — the method, in any agent
+1. Create a new working folder, add the photograph, and open that folder in
+   Codex or Claude Code.
+2. Send:
 
-```bash
-npx skills add alekseikondratenko/photo-to-threejs
+   > Reconstruct the building in this photograph as a measured Three.js model.
+
+The skill supplies the method: measure the photograph in pixels, solve the
+camera from picked lines, build procedural geometry, and score every render
+against the photograph with the same detector on both images. The result is a
+web viewer workspace plus the scored evidence that produced it.
+
+Two expectations, set honestly:
+
+- **A full reconstruction run typically takes 1–2 hours** of agent time. This
+  target optimises for fidelity and evidence, not turnaround.
+- **The finished model can be shown inline in the conversation** where the
+  client supports MCP Apps panels (the `open_viewer` tool). Every result also
+  serves a plain `localhost` URL for any browser, so nothing is lost on
+  clients without panels.
+
+## Install once
+
+Claude Code:
+
+```sh
+claude plugin marketplace add alekseikondratenko/photo-to-threejs
+claude plugin install photo-to-threejs-building@photo-to-threejs --scope user
 ```
 
-Installs into Claude Code, Codex, Cursor and [70+ agents](https://github.com/vercel-labs/skills).
-Claude Code users can equivalently use the plugin marketplace:
+Codex:
 
-```
-/plugin marketplace add alekseikondratenko/photo-to-threejs
-```
-
-Or copy [`skills/photo-to-threejs-building/`](skills/photo-to-threejs-building/) into
-`~/.claude/skills/` by hand. The skill is self-contained: it carries the method
-(`SKILL.md`), a deterministic reference scanner (`scripts/measure_reference.py`), and the
-full viewer engine as a scaffold (`assets/viewer-template/`) — no clone required.
-
-### The MCP server — tools + the 3D panel
-
-Add the server in [`mcp/`](mcp/) to your client (Node 18+). It ships `SKILL.md` as an MCP
-prompt, so installing the server brings the method with it.
-
-Cloning the repository is for reading the three worked examples and the viewer.
-
----
-
-## Examples
-
-Three subjects, chosen because each one broke an assumption the previous one had
-established. Same three in the viewer, same order.
-
-| Subject | Reference class | What it proved | Best metric |
-|---|---|---|---|
-| [**White House**](docs/examples/white-house/) | web photo, low + wide | classical detail must be *geometry*, not texture | **99–100 %** |
-| [**Taipei 101**](docs/examples/taipei-101/) | ground-level photo | a single linear scale **breaks**; use local ratios | 87 % on `litLuma` |
-| [**Empire State**](docs/examples/empire-state/) | elevated photo | linear pixel→metre works again from elevation | 100 % on `litLuma` |
-
-### The differentiator: what did it make up?
-
-Every single-photograph reconstruction invents the surfaces the camera never saw. Almost
-nobody shows you which ones. Hit **Rear** in the viewer, or look at the
-[White House rear elevation](docs/examples/white-house/#what-the-model-made-up): that
-geometry is a mirror-and-plausibility construction, and saying so is the point.
-
----
-
-## Run the viewer
-
-```bash
-cd viewer && npm install && npm run dev
+```sh
+codex plugin marketplace add alekseikondratenko/photo-to-threejs
+codex plugin add photo-to-threejs-building@photo-to-threejs
 ```
 
-Then open <http://localhost:5200>. Three models, five camera views each, wireframe and
-site-context toggles, and `window.__measure()` in the console to score the live canvas
-against the stored targets.
+Requirements: **Node.js 20+** only. The measurement server ships prebuilt in
+the plugin; the generated viewer workspace installs its own npm dependencies
+on first use. Restart the client after installing so the plugin loads.
 
-> Port 5200, not 5173 — on at least one machine a Docker container binds 5173 on IPv6 and
-> macOS resolves `localhost` there first, silently shadowing the dev server.
+## What the plugin contains
 
----
+- **The skill** — the working method: the RECON evidence ledger, camera-first
+  workflow, massing-before-detail gating, the scoring loop with stop rules,
+  and a bug checklist paid for by real runs.
+- **The measurement MCP server** — deterministic instruments the agent calls
+  instead of writing its own scripts: `view_crop` (magnified,
+  coordinate-gridded crops), `trace_edge` (visible edges → fitted lines),
+  `solve_camera` (vanishing points with per-line residuals and a leave-one-out
+  check), `unproject` (pixels + a named plane → world metres),
+  `measure_pitch`, `compare_images`, `score_render`, an auto-scoring workspace
+  scaffold (`init_workspace`), and the inline viewer panel (`open_viewer`).
 
-## How the scoring works
+## Design decisions and limits
 
-`window.__measure()` reads pixels back off the WebGL canvas (which is why the renderer sets
-`preserveDrawingBuffer: true`) and computes the same statistics that were scanned from the
-reference photograph: luminance of the lit and shadow bands, their ratio, the silhouette
-width fraction, and per-subject geometry checks such as window-bay pitch in pixels.
+- **One photo is the input.** Visible proportions, silhouette and viewpoint
+  guide the reconstruction; unseen sides are inferred coherently with the
+  observed form and recorded as assumptions — not recovered facts.
+- **Dimensions need an assumed or supplied scale.** Metre units in the output
+  do not make photo-derived dimensions survey data.
+- **The output is code, not a mesh.** Procedural TypeScript composing
+  primitives and swept profiles — editable parameters, not vertex soup.
+- **Every render is scored.** The workspace's save endpoint grades each render
+  against the photograph automatically (silhouette, column-wise skyline,
+  luma); saving and being scored are one action.
+- **Evidence has limits.** A good score proves silhouette and lighting
+  agreement from the solved viewpoint; it does not prove hidden geometry or
+  survey accuracy.
 
-Two things make the numbers trustworthy, and both are easy to get wrong:
+## For developers
 
-- **Compare at the reference's own aspect ratio.** Resize the viewport to match the
-  photograph's before scoring, or the framing — and therefore every band the harness
-  scans — is different.
-- **Report the metrics that are not degenerate.** `widthFrac` saturates at 0.700 for
-  subjects wider than the harness's 0.20W–0.90W scan window, which produces a *false*
-  100 % match. The White House page shows exactly this trap and what to quote instead.
+[Measurement MCP internals](mcp/README.md) ·
+[Development history and the design law](docs/history.md) ·
+[Code vs models vs photographs licensing](docs/LICENSING.md)
 
-The 28 failure modes that each cost a full review cycle are listed in
-[`skills/photo-to-threejs-building/SKILL.md`](skills/photo-to-threejs-building/SKILL.md).
+Regression suite: `cd mcp && npm install && npm test` — checks across multiple
+reference photographs so a fix for one subject class cannot silently regress
+another. Code is licensed under [Apache-2.0](LICENSE).
 
----
+## Related Work
 
-## Provenance
-
-The first reconstruction (Residential Tower AM271) was run on the
-[img2threejs](https://github.com/img2threejs/img2threejs) process harness, Apache-2.0. It
-would be easy to overstate or understate what came from it, so precisely:
-
-**Reused as code:** one function — `build_detail_inventory.load_image`, a standard-library
-PNG decoder — used throughout.
-
-**Used for AM271 only:** their spec/gating step and PBR extraction.
-
-**Their most valuable contribution was not code.** It was an *honesty discipline*: state
-plainly when output is approximate, and infer unseen faces by mirroring rather than faking
-confidence. That is why every model file in this repository carries a header saying which
-of its surfaces were observed and which were invented, and it is the direct ancestor of the
-"what did it make up?" idea above.
-
-**What is original here:** the viewer, the geometry library, the measurement harness, the
-scoring loop, the MCP server, and all three models. Their review loop was an agent
-eyeballing a comparison sheet; this replaced it with deterministic numeric scoring, which
-is what makes the tables above possible.
-
----
-
-## Licence
-
-**Apache-2.0** ([`LICENSE`](LICENSE)) for all code and all 3D models — use it freely,
-commercially included; keep the notice and state your changes. Attribution to img2threejs
-is in [`NOTICE`](NOTICE), as their licence requires.
-
-**Reference photographs are licensed separately and are not covered by the above.** All
-three viewer references are included under their own licences (CC BY 4.0, CC BY-SA 3.0,
-Unsplash License). One photograph is deliberately excluded: the stock image the White
-House model was originally solved against, whose author could not be traced. The model
-built from it is unaffected — depicting a building is not the same as redistributing a
-photograph of it.
-
-Full position, per image, with the reasoning: [`docs/LICENSING.md`](docs/LICENSING.md).
+[Photo to BIM](https://github.com/alekseikondratenko/photo-to-bim) — the
+successor built on this method: one photograph in, a semantic **IFC** model
+out, authored in Blender through Bonsai. Choose photo-to-bim when the
+deliverable is BIM/Revit; choose this repo when the deliverable is a
+web-viewable Three.js model with no Blender dependency.
